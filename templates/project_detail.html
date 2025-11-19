@@ -1,0 +1,797 @@
+{% extends "base.html" %}
+
+{% block title %}Projeto {{ project.name }} - Cronograma{% endblock %}
+
+{% block breadcrumbs %}
+    &raquo; Detalhes do projeto {{ project.name }}
+{% endblock %}
+
+{% block content %}
+{% set tool_options = [
+    "SEI",
+    "Ponto Digital",
+    "Portal de Compras",
+    "SIAFI",
+    "SISAP",
+    "SIAD",
+    "FFAK",
+    "SDAK",
+    "IA",
+    "Power Automate Web",
+    "Power Automate Desktop",
+    "APIs"
+] %}
+{% set stage_type_labels = {
+    "robô": "Robô",
+    "sistema": "Sistema",
+    "não se aplica": "Não se aplica"
+} %}
+<div class="card">
+    <h2>
+        Projeto:
+        <span class="inline-display">
+            {{ project.name }}
+            <button type="button" class="icon-button" data-toggle-target="project-edit-{{ project.id }}" aria-label="Editar projeto">&#9998;</button>
+        </span>
+    </h2>
+    <p class="small-text">
+        <strong>Início (calculado):</strong>
+        {% if project.start_date %}
+            {{ project.start_date.strftime("%d/%m/%Y") }}
+        {% else %}
+            —
+        {% endif %}
+        &nbsp;&nbsp;
+        <strong>Fim (calculado):</strong>
+        {% if project.end_date %}
+            {{ project.end_date.strftime("%d/%m/%Y") }}
+        {% else %}
+            —
+        {% endif %}
+    </p>
+    <div class="project-meta">
+        <p><strong>Escopo do Projeto:</strong> {{ project.scope or "—" }}</p>
+        <p><strong>Status:</strong> {{ project.status or "—" }}</p>
+        <p>
+            <strong>GitHub:</strong>
+            {% if project.github_link %}
+                <a href="{{ project.github_link }}" target="_blank" rel="noopener">{{ project.github_link }}</a>
+            {% else %}
+                —
+            {% endif %}
+        </p>
+        <p><strong>Coordenador:</strong> {{ project.coordinator or "—" }}</p>
+        <p><strong>Apoio automatiza:</strong> {{ project.automation_support or "—" }}</p>
+        <p><strong>Órgão demandante:</strong> {{ project.requesting_agency or "—" }}</p>
+        <p><strong>Setor interno:</strong> {{ project.internal_department or "—" }}</p>
+        <p><strong>Gestor responsável:</strong> {{ project.sponsoring_manager or "—" }}</p>
+        <p><strong>Contato gestor responsável:</strong> {{ project.sponsoring_manager_contact or "—" }}</p>
+        <p><strong>Gestor técnico:</strong> {{ project.technical_manager or "—" }}</p>
+        <p><strong>Contato gestor técnico:</strong> {{ project.technical_manager_contact or "—" }}</p>
+    </div>
+    <div class="edit-form" id="project-edit-{{ project.id }}">
+        <form class="project-edit-form" action="{{ url_for('update_project', project_id=project.id) }}" method="post">
+            <div class="project-form-fields">
+                <div class="field">
+                    <label for="project-name-{{ project.id }}">Nome do projeto</label>
+                    <input type="text" id="project-name-{{ project.id }}" name="name" value="{{ project.name }}" required>
+                </div>
+                <div class="field" style="grid-column: 1 / -1;">
+                    <label for="project-scope-{{ project.id }}">Escopo do Projeto</label>
+                    <textarea id="project-scope-{{ project.id }}" name="scope">{{ project.scope or "" }}</textarea>
+                </div>
+                <div class="field">
+                    <label for="project-status-{{ project.id }}">Status</label>
+                    <select id="project-status-{{ project.id }}" name="status">
+                        <option value="">Selecione...</option>
+                        {% for status_option in status_choices %}
+                            <option value="{{ status_option }}" {% if project.status == status_option %}selected{% endif %}>
+                                {{ status_option }}
+                            </option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="field">
+                    <label for="project-github-{{ project.id }}">GitHub</label>
+                    <input type="url" id="project-github-{{ project.id }}" name="github_link" value="{{ project.github_link or '' }}">
+                </div>
+                <div class="field">
+                    <label for="project-coordinator-{{ project.id }}">Coordenador</label>
+                    <input type="text" id="project-coordinator-{{ project.id }}" name="coordinator" value="{{ project.coordinator or '' }}">
+                </div>
+                <div class="field">
+                    <label for="project-support-{{ project.id }}">Apoio automatiza</label>
+                    <input type="text" id="project-support-{{ project.id }}" name="automation_support" value="{{ project.automation_support or '' }}">
+                </div>
+                <div class="field">
+                    <label for="project-agency-{{ project.id }}">Órgão demandante</label>
+                    <input type="text" id="project-agency-{{ project.id }}" name="requesting_agency" value="{{ project.requesting_agency or '' }}">
+                </div>
+                <div class="field">
+                    <label for="project-department-{{ project.id }}">Setor interno</label>
+                    <input type="text" id="project-department-{{ project.id }}" name="internal_department" value="{{ project.internal_department or '' }}">
+                </div>
+                <div class="field">
+                    <label for="project-sponsor-{{ project.id }}">Gestor responsável</label>
+                    <input type="text" id="project-sponsor-{{ project.id }}" name="sponsoring_manager" value="{{ project.sponsoring_manager or '' }}">
+                </div>
+                <div class="field">
+                    <label for="project-sponsor-contact-{{ project.id }}">Contato gestor responsável</label>
+                    <input type="email" id="project-sponsor-contact-{{ project.id }}" name="sponsoring_manager_contact" value="{{ project.sponsoring_manager_contact or '' }}">
+                </div>
+                <div class="field">
+                    <label for="project-tech-manager-{{ project.id }}">Gestor técnico</label>
+                    <input type="text" id="project-tech-manager-{{ project.id }}" name="technical_manager" value="{{ project.technical_manager or '' }}">
+                </div>
+                <div class="field">
+                    <label for="project-tech-contact-{{ project.id }}">Contato gestor técnico</label>
+                    <input type="email" id="project-tech-contact-{{ project.id }}" name="technical_manager_contact" value="{{ project.technical_manager_contact or '' }}">
+                </div>
+            </div>
+            <div>
+                <button type="submit">Salvar</button>
+                <button type="button" class="secondary" data-cancel-target="project-edit-{{ project.id }}">Cancelar</button>
+            </div>
+        </form>
+        <form class="inline" action="{{ url_for('delete_project', project_id=project.id) }}" method="post" onsubmit="return confirm('Deseja realmente excluir este projeto e todos os itens relacionados?');">
+            <button type="submit" class="danger">Excluir projeto</button>
+        </form>
+    </div>
+</div>
+
+<div class="card">
+    <h3>Macroetapas</h3>
+
+    {% if project.macrostages %}
+        <ul class="macrostage-list" data-project-id="{{ project.id }}">
+            {% for macrostage in project.macrostages %}
+                {% set macro_tasks = macrostage.tasks | selectattr('stage_id', 'equalto', None) | list %}
+                <li class="macrostage-item" data-macrostage-id="{{ macrostage.id }}" draggable="true" id="macrostage-{{ macrostage.id }}">
+                    <div class="inline-display">
+                        <span class="drag-handle" title="Arrastar">&#9776;</span>
+                        <strong>Macroetapa:</strong> {{ macrostage.name }}
+                        <button type="button" class="icon-button" data-toggle-target="macrostage-edit-{{ macrostage.id }}" aria-label="Editar macroetapa">&#9998;</button>
+                    </div>
+                    <span class="small-text">
+                        (Início:
+                        {% if macrostage.start_date %}
+                            {{ macrostage.start_date.strftime("%d/%m/%Y") }}
+                        {% else %}
+                            —
+                        {% endif %}
+                        ; Fim:
+                        {% if macrostage.end_date %}
+                            {{ macrostage.end_date.strftime("%d/%m/%Y") }}
+                        {% else %}
+                            —
+                        {% endif %}
+                        )
+                    </span>
+                    <div class="edit-form" id="macrostage-edit-{{ macrostage.id }}">
+                        <form class="inline" action="{{ url_for('update_macrostage', macrostage_id=macrostage.id) }}" method="post">
+                            <label class="small-text" for="macrostage-name-{{ macrostage.id }}">Novo nome:</label>
+                            <input type="text" id="macrostage-name-{{ macrostage.id }}" name="name" value="{{ macrostage.name }}" required>
+                            <button type="submit">Salvar</button>
+                            <button type="button" class="secondary" data-cancel-target="macrostage-edit-{{ macrostage.id }}">Cancelar</button>
+                        </form>
+                        <form class="inline" action="{{ url_for('delete_macrostage', macrostage_id=macrostage.id) }}" method="post" onsubmit="return confirm('Excluir esta macroetapa e todas as etapas/tarefas ligadas a ela?');">
+                            <button type="submit" class="danger">Excluir macroetapa</button>
+                        </form>
+                    </div>
+
+                    {% set macro_tasks = macrostage.tasks | selectattr('stage', 'equalto', None) | list %}
+                    {% if not macrostage.structure_type %}
+                        <div class="structure-choice">
+                            <p>Como deseja organizar esta macroetapa?</p>
+                            <form action="{{ url_for('set_macrostage_structure', macrostage_id=macrostage.id) }}" method="post">
+                                <input type="hidden" name="structure_type" value="stages">
+                                <button type="submit">Criar etapas e depois tarefas</button>
+                            </form>
+                            <form action="{{ url_for('set_macrostage_structure', macrostage_id=macrostage.id) }}" method="post">
+                                <input type="hidden" name="structure_type" value="tasks">
+                                <button type="submit">Adicionar tarefas diretamente à macroetapa</button>
+                            </form>
+                        </div>
+                    {% endif %}
+
+                    {% if macrostage.structure_type == 'tasks' %}
+                    <div class="card" style="padding: 12px; background-color: #fafafa; border: 1px dashed #ddd;">
+                        {% if macro_tasks %}
+                            <table>
+                                <thead>
+                                <tr>
+                                    <th>Tarefa</th>
+                                    <th>Início</th>
+                                    <th>Fim</th>
+                                    <th>Ações</th>
+                                </tr>
+                                </thead>
+                                <tbody class="task-table" data-parent-type="macrostage" data-parent-id="{{ macrostage.id }}">
+                                {% for task in macro_tasks %}
+                                    <tr class="task-row" data-task-id="{{ task.id }}" draggable="true" id="task-{{ task.id }}">
+                                        <td>
+                                            <span class="drag-handle" title="Arrastar">&#9776;</span>
+                                            {{ task.name }}
+                                        </td>
+                                        <td>
+                                            {% if task.start_date %}
+                                                {{ task.start_date.strftime("%d/%m/%Y") }}
+                                            {% else %}
+                                                —
+                                            {% endif %}
+                                        </td>
+                                        <td>
+                                            {% if task.end_date %}
+                                                {{ task.end_date.strftime("%d/%m/%Y") }}
+                                            {% else %}
+                                                —
+                                            {% endif %}
+                                        </td>
+                                        <td>
+                                            <button type="button" class="icon-button" data-toggle-target="task-edit-{{ task.id }}" aria-label="Editar tarefa">&#9998;</button>
+                                            <button type="button" class="link-button" data-toggle-target="task-weekly-{{ task.id }}">Atualizações semanais</button>
+                                        </td>
+                                    </tr>
+                                    <tr class="edit-row" id="task-edit-{{ task.id }}">
+                                        <td colspan="4">
+                                            <div class="task-edit-form">
+                                                <form action="{{ url_for('update_task', task_id=task.id) }}" method="post">
+                                                    <label class="small-text" for="task-name-{{ task.id }}">Nome:</label>
+                                                    <input type="text" id="task-name-{{ task.id }}" name="name" value="{{ task.name }}" required>
+                                                    <label class="small-text" for="task-start-{{ task.id }}">Início:</label>
+                                                    <input type="date" id="task-start-{{ task.id }}" name="start_date" value="{% if task.start_date %}{{ task.start_date.strftime('%Y-%m-%d') }}{% endif %}">
+                                                    <label class="small-text" for="task-end-{{ task.id }}">Fim:</label>
+                                                    <input type="date" id="task-end-{{ task.id }}" name="end_date" value="{% if task.end_date %}{{ task.end_date.strftime('%Y-%m-%d') }}{% endif %}">
+                                                    <button type="submit">Salvar</button>
+                                                    <button type="button" class="secondary" data-cancel-target="task-edit-{{ task.id }}">Cancelar</button>
+                                                </form>
+                                                <form class="inline" action="{{ url_for('delete_task', task_id=task.id) }}" method="post" onsubmit="return confirm('Excluir esta tarefa?');">
+                                                    <button type="submit" class="danger">Excluir tarefa</button>
+                                                </form>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                    <tr class="weekly-row" id="task-weekly-{{ task.id }}">
+                                        <td colspan="4">
+                                            <div class="weekly-container">
+                                                {% if task.weekly_updates %}
+                                                    <table>
+                                                        <thead>
+                                                        <tr>
+                                                            <th>Atualizações semanais</th>
+                                                            <th>Data de atualização</th>
+                                                            <th>Ações</th>
+                                                        </tr>
+                                                        </thead>
+                                                        <tbody>
+                                                        {% for update in task.weekly_updates %}
+                                                            <tr>
+                                                                <td>{{ update.content }}</td>
+                                                                <td>
+                                                                    {% if update.update_date %}
+                                                                        {{ update.update_date.strftime("%d/%m/%Y") }}
+                                                                    {% else %}
+                                                                        —
+                                                                    {% endif %}
+                                                                </td>
+                                                                <td>
+                                                                    <button type="button" class="icon-button" data-toggle-target="weekly-edit-{{ update.id }}" aria-label="Editar atualização">&#9998;</button>
+                                                                    <form class="icon-form" action="{{ url_for('delete_weekly_update', update_id=update.id) }}" method="post" onsubmit="return confirm('Excluir esta atualização?');">
+                                                                        <button type="submit" class="icon-button danger" title="Excluir atualização">&#128465;</button>
+                                                                    </form>
+                                                                </td>
+                                                            </tr>
+                                                            <tr class="edit-row" id="weekly-edit-{{ update.id }}">
+                                                                <td colspan="3">
+                                                                    <form action="{{ url_for('update_weekly_update', update_id=update.id) }}" method="post" class="task-edit-form">
+                                                                        <label class="small-text" for="weekly-content-{{ update.id }}">Atualização:</label>
+                                                                        <textarea id="weekly-content-{{ update.id }}" name="content" rows="2" required>{{ update.content }}</textarea>
+                                                                        <label class="small-text" for="weekly-date-{{ update.id }}">Data:</label>
+                                                                        <input type="date" id="weekly-date-{{ update.id }}" name="update_date" value="{% if update.update_date %}{{ update.update_date.strftime('%Y-%m-%d') }}{% endif %}" required>
+                                                                        <button type="submit">Salvar</button>
+                                                                        <button type="button" class="secondary" data-cancel-target="weekly-edit-{{ update.id }}">Cancelar</button>
+                                                                    </form>
+                                                                </td>
+                                                            </tr>
+                                                        {% endfor %}
+                                                        </tbody>
+                                                    </table>
+                                                {% else %}
+                                                    <p class="small-text">Nenhuma atualização registrada ainda.</p>
+                                                {% endif %}
+
+                                                <div class="new-weekly-update">
+                                                    <form action="{{ url_for('create_weekly_update', task_id=task.id) }}" method="post" class="task-edit-form">
+                                                        <label class="small-text" for="weekly-new-content-{{ task.id }}">Atualização:</label>
+                                                        <textarea id="weekly-new-content-{{ task.id }}" name="content" rows="2" required></textarea>
+                                                        <label class="small-text" for="weekly-new-date-{{ task.id }}">Data:</label>
+                                                        <input type="date" id="weekly-new-date-{{ task.id }}" name="update_date" required>
+                                                        <button type="submit">Adicionar</button>
+                                                    </form>
+                                                </div>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                {% endfor %}
+                                </tbody>
+                            </table>
+                        {% else %}
+                            <p class="small-text">Nenhuma tarefa cadastrada diretamente nesta macroetapa.</p>
+                        {% endif %}
+
+                        <form class="inline" action="{{ url_for('create_task') }}" method="post" style="margin-top: 8px; display: block;">
+                            <input type="hidden" name="macrostage_id" value="{{ macrostage.id }}">
+                            <input type="text" name="name" placeholder="Nova tarefa" required>
+                            <label class="small-text">Início:</label>
+                            <input type="date" name="start_date">
+                            <label class="small-text">Fim:</label>
+                            <input type="date" name="end_date">
+                            <button type="submit">+ Tarefa</button>
+                        </form>
+                    </div>
+                    {% endif %}
+
+                    {% if macrostage.structure_type == 'stages' %}
+                        {# Form para criar nova Etapa dentro desta Macroetapa #}
+                        <form class="inline stage-create-form stage-type-form" action="{{ url_for('create_stage') }}" method="post" style="margin-top: 10px;">
+                            <input type="hidden" name="macrostage_id" value="{{ macrostage.id }}">
+                            <input type="text" name="name" placeholder="Nova etapa" required>
+                            <div class="stage-type-choice">
+                                <span class="small-text">Trata-se de um robô ou um sistema?</span>
+                                {% for opt in stage_type_choices %}
+                                    <label>
+                                        <input type="radio" name="stage_type" value="{{ opt }}" required>
+                                        {{ stage_type_labels[opt] }}
+                                    </label>
+                                {% endfor %}
+                            </div>
+                            <div class="stage-extra-fields" data-stage-extra>
+                                <label class="small-text">Escopo:</label>
+                                <textarea name="scope" rows="2"></textarea>
+                                <label class="small-text">Ferramentas e sistemas utilizados:</label>
+                                <select name="tools" multiple size="4">
+                                    {% for opt in tool_options %}
+                                        <option value="{{ opt }}">{{ opt }}</option>
+                                    {% endfor %}
+                                </select>
+                                <label class="small-text">Outras ferramentas e/ou sistemas:</label>
+                                <input type="text" name="other_tools">
+                            </div>
+                            <button type="submit">+ Etapa</button>
+                        </form>
+
+                        {% if macrostage.stages %}
+                        <ul class="stage-list" data-macrostage-id="{{ macrostage.id }}">
+                            {% for stage in macrostage.stages %}
+                                {% set stage_tools_display = stage.tools.split(',') if stage.tools else [] %}
+                                {% set current_stage_type = stage.stage_type or "não se aplica" %}
+                                <li class="stage-item" data-stage-id="{{ stage.id }}" draggable="true" id="stage-{{ stage.id }}">
+                                    <div class="inline-display">
+                                        <span class="drag-handle" title="Arrastar">&#9776;</span>
+                                        <strong>Etapa:</strong> {{ stage.name }}
+                                        <button type="button" class="icon-button" data-toggle-target="stage-edit-{{ stage.id }}" aria-label="Editar etapa">&#9998;</button>
+                                    </div>
+                                    {% if current_stage_type in ['robô', 'sistema'] %}
+                                        <div class="stage-meta">
+                                            <p><strong>Escopo:</strong> {{ stage.scope or "—" }}</p>
+                                            <p><strong>Ferramentas e sistemas utilizados:</strong> {{ stage_tools_display|join(', ') if stage_tools_display else "—" }}</p>
+                                            <p><strong>Outras ferramentas:</strong> {{ stage.other_tools or "—" }}</p>
+                                        </div>
+                                    {% endif %}
+                                    <span class="small-text">
+                                        (Início:
+                                        {% if stage.start_date %}
+                                            {{ stage.start_date.strftime("%d/%m/%Y") }}
+                                        {% else %}
+                                            —
+                                        {% endif %}
+                                        ; Fim:
+                                        {% if stage.end_date %}
+                                            {{ stage.end_date.strftime("%d/%m/%Y") }}
+                                        {% else %}
+                                            —
+                                        {% endif %}
+                                        )
+                                    </span>
+                                    <div class="edit-form" id="stage-edit-{{ stage.id }}">
+                                        {% set stage_tools_selected = stage.tools.split(',') if stage.tools else [] %}
+                                        <form class="stage-type-form" action="{{ url_for('update_stage', stage_id=stage.id) }}" method="post">
+                                            <label class="small-text" for="stage-name-{{ stage.id }}">Nome da etapa:</label>
+                                            <input type="text" id="stage-name-{{ stage.id }}" name="name" value="{{ stage.name }}" required>
+                                            <div class="stage-type-choice">
+                                                <span class="small-text">Trata-se de um robô ou um sistema?</span>
+                                                {% for opt in stage_type_choices %}
+                                                    <label>
+                                                        <input type="radio" name="stage_type" value="{{ opt }}" {% if current_stage_type == opt %}checked{% endif %}>
+                                                        {{ stage_type_labels[opt] }}
+                                                    </label>
+                                                {% endfor %}
+                                            </div>
+                                            <div class="stage-extra-fields" data-stage-extra style="display: {% if current_stage_type in ['robô','sistema'] %}flex{% else %}none{% endif %};">
+                                                <label class="small-text" for="stage-scope-{{ stage.id }}">Escopo:</label>
+                                                <textarea id="stage-scope-{{ stage.id }}" name="scope" rows="2">{{ stage.scope or '' }}</textarea>
+                                                <label class="small-text">Ferramentas e sistemas utilizados:</label>
+                                                <select name="tools" multiple size="4">
+                                                    {% for opt in tool_options %}
+                                                        <option value="{{ opt }}" {% if opt in stage_tools_selected %}selected{% endif %}>{{ opt }}</option>
+                                                    {% endfor %}
+                                                </select>
+                                                <label class="small-text" for="stage-other-tools-{{ stage.id }}">Outras ferramentas e/ou sistemas:</label>
+                                                <input type="text" id="stage-other-tools-{{ stage.id }}" name="other_tools" value="{{ stage.other_tools or '' }}">
+                                            </div>
+                                            <button type="submit">Salvar</button>
+                                            <button type="button" class="secondary" data-cancel-target="stage-edit-{{ stage.id }}">Cancelar</button>
+                                        </form>
+                                        <form class="inline" action="{{ url_for('delete_stage', stage_id=stage.id) }}" method="post" onsubmit="return confirm('Excluir esta etapa e todas as tarefas ligadas a ela?');">
+                                            <button type="submit" class="danger">Excluir etapa</button>
+                                        </form>
+                                    </div>
+
+                                    {# Lista de tarefas da etapa #}
+                                    {% if stage.tasks %}
+                                        <table>
+                                            <thead>
+                                            <tr>
+                                                <th>Tarefa</th>
+                                                <th>Início</th>
+                                                <th>Fim</th>
+                                                <th>Ações</th>
+                                            </tr>
+                                            </thead>
+                                            <tbody class="task-table" data-parent-type="stage" data-parent-id="{{ stage.id }}">
+                                            {% for task in stage.tasks %}
+                                                <tr class="task-row" data-task-id="{{ task.id }}" draggable="true" id="task-{{ task.id }}">
+                                                    <td>
+                                                        <span class="drag-handle" title="Arrastar">&#9776;</span>
+                                                        {{ task.name }}
+                                                    </td>
+                                                    <td>
+                                                        {% if task.start_date %}
+                                                            {{ task.start_date.strftime("%d/%m/%Y") }}
+                                                        {% else %}
+                                                            —
+                                                        {% endif %}
+                                                    </td>
+                                                    <td>
+                                                        {% if task.end_date %}
+                                                            {{ task.end_date.strftime("%d/%m/%Y") }}
+                                                        {% else %}
+                                                            —
+                                                        {% endif %}
+                                                    </td>
+                                                    <td>
+                                                        <button type="button" class="icon-button" data-toggle-target="task-edit-{{ task.id }}" aria-label="Editar tarefa">&#9998;</button>
+                                                        <button type="button" class="link-button" data-toggle-target="task-weekly-{{ task.id }}">Atualizações semanais</button>
+                                                    </td>
+                                                </tr>
+                                                <tr class="edit-row" id="task-edit-{{ task.id }}">
+                                                    <td colspan="4">
+                                                        <div class="task-edit-form">
+                                                            <form action="{{ url_for('update_task', task_id=task.id) }}" method="post">
+                                                                <label class="small-text" for="task-name-{{ task.id }}">Nome:</label>
+                                                                <input type="text" id="task-name-{{ task.id }}" name="name" value="{{ task.name }}" required>
+                                                                <label class="small-text" for="task-start-{{ task.id }}">Início:</label>
+                                                                <input type="date" id="task-start-{{ task.id }}" name="start_date" value="{% if task.start_date %}{{ task.start_date.strftime('%Y-%m-%d') }}{% endif %}">
+                                                                <label class="small-text" for="task-end-{{ task.id }}">Fim:</label>
+                                                                <input type="date" id="task-end-{{ task.id }}" name="end_date" value="{% if task.end_date %}{{ task.end_date.strftime('%Y-%m-%d') }}{% endif %}">
+                                                                <button type="submit">Salvar</button>
+                                                                <button type="button" class="secondary" data-cancel-target="task-edit-{{ task.id }}">Cancelar</button>
+                                                            </form>
+                                                            <form class="inline" action="{{ url_for('delete_task', task_id=task.id) }}" method="post" onsubmit="return confirm('Excluir esta tarefa?');">
+                                                                <button type="submit" class="danger">Excluir tarefa</button>
+                                                            </form>
+                                                        </div>
+                                                    </td>
+                                                </tr>
+                                                <tr class="weekly-row" id="task-weekly-{{ task.id }}">
+                                                    <td colspan="4">
+                                                        <div class="weekly-container">
+                                                            {% if task.weekly_updates %}
+                                                                <table>
+                                                                    <thead>
+                                                                    <tr>
+                                                                        <th>Atualizações semanais</th>
+                                                                        <th>Data de atualização</th>
+                                                                        <th>Ações</th>
+                                                                    </tr>
+                                                                    </thead>
+                                                                    <tbody>
+                                                                    {% for update in task.weekly_updates %}
+                                                                        <tr>
+                                                                            <td>{{ update.content }}</td>
+                                                                            <td>
+                                                                                {% if update.update_date %}
+                                                                                    {{ update.update_date.strftime("%d/%m/%Y") }}
+                                                                                {% else %}
+                                                                                    —
+                                                                                {% endif %}
+                                                                            </td>
+                                                                            <td>
+                                                                                <button type="button" class="icon-button" data-toggle-target="weekly-edit-{{ update.id }}" aria-label="Editar atualização">&#9998;</button>
+                                                                                <form class="icon-form" action="{{ url_for('delete_weekly_update', update_id=update.id) }}" method="post" onsubmit="return confirm('Excluir esta atualização?');">
+                                                                                    <button type="submit" class="icon-button danger" title="Excluir atualização">&#128465;</button>
+                                                                                </form>
+                                                                            </td>
+                                                                        </tr>
+                                                                        <tr class="edit-row" id="weekly-edit-{{ update.id }}">
+                                                                            <td colspan="3">
+                                                                                <form action="{{ url_for('update_weekly_update', update_id=update.id) }}" method="post" class="task-edit-form">
+                                                                                    <label class="small-text" for="weekly-content-{{ update.id }}">Atualização:</label>
+                                                                                    <textarea id="weekly-content-{{ update.id }}" name="content" rows="2" required>{{ update.content }}</textarea>
+                                                                                    <label class="small-text" for="weekly-date-{{ update.id }}">Data:</label>
+                                                                                    <input type="date" id="weekly-date-{{ update.id }}" name="update_date" value="{% if update.update_date %}{{ update.update_date.strftime('%Y-%m-%d') }}{% endif %}" required>
+                                                                                    <button type="submit">Salvar</button>
+                                                                                    <button type="button" class="secondary" data-cancel-target="weekly-edit-{{ update.id }}">Cancelar</button>
+                                                                                </form>
+                                                                            </td>
+                                                                        </tr>
+                                                                    {% endfor %}
+                                                                    </tbody>
+                                                                </table>
+                                                            {% else %}
+                                                                <p class="small-text">Nenhuma atualização registrada ainda.</p>
+                                                            {% endif %}
+
+                                                            <div class="new-weekly-update">
+                                                                <form action="{{ url_for('create_weekly_update', task_id=task.id) }}" method="post" class="task-edit-form">
+                                                                    <label class="small-text" for="weekly-new-content-{{ task.id }}">Atualização:</label>
+                                                                    <textarea id="weekly-new-content-{{ task.id }}" name="content" rows="2" required></textarea>
+                                                                    <label class="small-text" for="weekly-new-date-{{ task.id }}">Data:</label>
+                                                                    <input type="date" id="weekly-new-date-{{ task.id }}" name="update_date" required>
+                                                                    <button type="submit">Adicionar</button>
+                                                                </form>
+                                                            </div>
+                                                        </div>
+                                                    </td>
+                                                </tr>
+                                            {% endfor %}
+                                            </tbody>
+                                        </table>
+                                    {% else %}
+                                        <p class="small-text">Nenhuma tarefa cadastrada para esta etapa.</p>
+                                    {% endif %}
+
+                                    {# Form para criar nova Tarefa dentro desta Etapa #}
+                                    <form class="inline" action="{{ url_for('create_task') }}" method="post" style="margin-top: 8px;">
+                                        <input type="hidden" name="stage_id" value="{{ stage.id }}">
+                                        <input type="text" name="name" placeholder="Nova tarefa" required>
+                                        <label class="small-text">Início:</label>
+                                        <input type="date" name="start_date">
+                                        <label class="small-text">Fim:</label>
+                                        <input type="date" name="end_date">
+                                        <button type="submit">+ Tarefa</button>
+                                    </form>
+                                </li>
+                            {% endfor %}
+                        </ul>
+                        {% else %}
+                            <p class="small-text">Nenhuma etapa cadastrada nesta macroetapa.</p>
+                        {% endif %}
+                    {% endif %}
+                </li>
+            {% endfor %}
+        </ul>
+    {% else %}
+        <p>Nenhuma macroetapa cadastrada neste projeto.</p>
+    {% endif %}
+</div>
+
+<div class="card">
+    <h3>Adicionar nova macroetapa</h3>
+    <form action="{{ url_for('create_macrostage') }}" method="post">
+        <input type="hidden" name="project_id" value="{{ project.id }}">
+        <label for="name">Nome da macroetapa:</label><br>
+        <input type="text" id="name" name="name" required style="min-width: 300px;">
+        <br><br>
+        <button type="submit">Criar macroetapa</button>
+    </form>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+document.addEventListener("DOMContentLoaded", function () {
+    initMacrostageDrag();
+    initStageDrag();
+    initTaskDrag();
+});
+
+function initMacrostageDrag() {
+    const macrostageList = document.querySelector(".macrostage-list");
+    if (!macrostageList) {
+        return;
+    }
+    const projectId = macrostageList.dataset.projectId;
+
+    macrostageList.addEventListener("dragstart", function (event) {
+        const item = event.target.closest(".macrostage-item");
+        if (!item) {
+            return;
+        }
+        item.classList.add("dragging");
+        event.dataTransfer.effectAllowed = "move";
+    });
+
+    macrostageList.addEventListener("dragend", function (event) {
+        const item = event.target.closest(".macrostage-item");
+        if (item) {
+            item.classList.remove("dragging");
+        }
+    });
+
+    macrostageList.addEventListener("dragover", function (event) {
+        event.preventDefault();
+        const afterElement = getDragAfterElement(macrostageList, event.clientY);
+        const dragging = macrostageList.querySelector(".macrostage-item.dragging");
+        if (!dragging) {
+            return;
+        }
+
+        if (afterElement == null) {
+            macrostageList.appendChild(dragging);
+        } else if (afterElement !== dragging) {
+            macrostageList.insertBefore(dragging, afterElement);
+        }
+    });
+
+    macrostageList.addEventListener("drop", function (event) {
+        event.preventDefault();
+        const order = Array.from(macrostageList.querySelectorAll(".macrostage-item"))
+            .map(item => parseInt(item.dataset.macrostageId, 10))
+            .filter(Boolean);
+
+        fetch(`/projects/${projectId}/macrostages/reorder`, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ order }),
+        }).catch(error => {
+            console.error("Erro ao salvar nova ordem:", error);
+        });
+    });
+
+    function getDragAfterElement(container, y) {
+        const selector = ".macrostage-item:not(.dragging)";
+        return computeAfterElement(container, y, selector);
+    }
+}
+
+function initStageDrag() {
+    const stageLists = document.querySelectorAll(".stage-list");
+
+    stageLists.forEach(list => {
+        const macrostageId = list.dataset.macrostageId;
+
+        list.addEventListener("dragstart", event => {
+            const item = event.target.closest(".stage-item");
+            if (!item) {
+                return;
+            }
+            item.classList.add("dragging");
+            event.dataTransfer.effectAllowed = "move";
+        });
+
+        list.addEventListener("dragend", event => {
+            const item = event.target.closest(".stage-item");
+            if (item) {
+                item.classList.remove("dragging");
+            }
+        });
+
+        list.addEventListener("dragover", event => {
+            event.preventDefault();
+            const afterElement = getStageAfterElement(list, event.clientY);
+            const dragging = list.querySelector(".stage-item.dragging");
+            if (!dragging) {
+                return;
+            }
+            if (afterElement == null) {
+                list.appendChild(dragging);
+            } else if (afterElement !== dragging) {
+                list.insertBefore(dragging, afterElement);
+            }
+        });
+
+        list.addEventListener("drop", event => {
+            event.preventDefault();
+            const order = Array.from(list.querySelectorAll(".stage-item"))
+                .map(item => parseInt(item.dataset.stageId, 10))
+                .filter(Boolean);
+
+            fetch(`/stages/${macrostageId}/reorder`, {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                },
+                body: JSON.stringify({ order }),
+            }).catch(error => {
+                console.error("Erro ao salvar nova ordem de etapas:", error);
+            });
+        });
+    });
+
+    function getStageAfterElement(container, y) {
+        const selector = ".stage-item:not(.dragging)";
+        return computeAfterElement(container, y, selector);
+    }
+}
+
+function computeAfterElement(container, y, selector) {
+    const elements = [...container.querySelectorAll(selector)];
+    return elements.reduce((closest, child) => {
+        const box = child.getBoundingClientRect();
+        const offset = y - box.top - box.height / 2;
+        if (offset < 0 && offset > closest.offset) {
+            return { offset, element: child };
+        }
+        return closest;
+    }, { offset: Number.NEGATIVE_INFINITY, element: null }).element;
+}
+
+function initTaskDrag() {
+    const taskTables = document.querySelectorAll(".task-table");
+
+    taskTables.forEach(table => {
+        const parentType = table.dataset.parentType || "stage";
+        const parentId = table.dataset.parentId;
+
+        table.addEventListener("dragstart", event => {
+            const row = event.target.closest(".task-row");
+            if (!row) {
+                return;
+            }
+            row.classList.add("dragging");
+            event.dataTransfer.effectAllowed = "move";
+        });
+
+        table.addEventListener("dragend", event => {
+            const row = event.target.closest(".task-row");
+            if (row) {
+                row.classList.remove("dragging");
+            }
+        });
+
+        table.addEventListener("dragover", event => {
+            event.preventDefault();
+            const afterElement = getTaskAfterElement(table, event.clientY);
+            const dragging = table.querySelector(".task-row.dragging");
+            if (!dragging) {
+                return;
+            }
+            if (afterElement == null) {
+                table.appendChild(dragging);
+            } else if (afterElement !== dragging) {
+                table.insertBefore(dragging, afterElement);
+            }
+        });
+
+        table.addEventListener("drop", event => {
+            event.preventDefault();
+            const order = Array.from(table.querySelectorAll(".task-row"))
+                .map(row => parseInt(row.dataset.taskId, 10))
+                .filter(Boolean);
+
+            const url = parentType === "macrostage"
+                ? `/macrostages/${parentId}/tasks/reorder`
+                : `/tasks/${parentId}/reorder`;
+
+            fetch(url, {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                },
+                body: JSON.stringify({ order }),
+            }).catch(error => {
+                console.error("Erro ao salvar nova ordem de tarefas:", error);
+            });
+        });
+    });
+
+    function getTaskAfterElement(table, y) {
+        const selector = ".task-row:not(.dragging)";
+        return computeAfterElement(table, y, selector);
+    }
+}
+</script>
+{% endblock %}

@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <title>{% block title %}Cronograma de Projetos{% endblock %}</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 24px;
+        }
+        header {
+            margin-bottom: 24px;
+        }
+        .container {
+            max-width: 1000px;
+            margin: 0 auto;
+        }
+        .card {
+            border: 1px solid #ddd;
+            padding: 16px;
+            border-radius: 8px;
+            margin-bottom: 16px;
+        }
+        .card h2, .card h3, .card h4 {
+            margin-top: 0;
+        }
+        form.inline {
+            display: inline-block;
+            margin-top: 8px;
+        }
+        form.inline.stage-type-form {
+            display: block;
+        }
+        form.icon-form {
+            display: inline;
+            margin: 0;
+        }
+        form.inline input[type="text"] {
+            padding: 4px 8px;
+        }
+        form.inline input[type="date"] {
+            padding: 4px 8px;
+        }
+        form.inline button {
+            padding: 4px 8px;
+            cursor: pointer;
+        }
+        ul {
+            padding-left: 20px;
+        }
+        .small-text {
+            font-size: 0.85rem;
+            color: #555;
+        }
+        .inline-display {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .icon-button {
+            background: none;
+            border: none;
+            cursor: pointer;
+            padding: 2px;
+            font-size: 1rem;
+        }
+        .icon-button:hover {
+            color: #005999;
+        }
+        .icon-button.danger {
+            color: #a30000;
+        }
+        .icon-button.danger:hover {
+            color: #cc0000;
+        }
+        .secondary {
+            background-color: #f5f5f5;
+            border: 1px solid #bbb;
+        }
+        .link-button {
+            padding: 4px 10px;
+            border: 1px solid #ccc;
+            background-color: #f8f8f8;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.85rem;
+        }
+        .link-button:hover {
+            background-color: #f0f0f0;
+        }
+        .breadcrumbs {
+            margin-bottom: 16px;
+            font-size: 0.9rem;
+        }
+        a {
+            color: #0066cc;
+            text-decoration: none;
+        }
+        a:hover {
+            text-decoration: underline;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 8px;
+        }
+        table th, table td {
+            border: 1px solid #ddd;
+            padding: 4px 8px;
+            text-align: left;
+            font-size: 0.9rem;
+        }
+        table th {
+            background-color: #f6f6f6;
+        }
+        .actions {
+            margin-top: 8px;
+        }
+        .edit-form,
+        .edit-row {
+            display: none;
+        }
+        .edit-form.active {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            margin-top: 8px;
+        }
+        .task-edit-form {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            align-items: center;
+        }
+        .edit-row.active {
+            display: table-row;
+        }
+        .weekly-row {
+            display: none;
+        }
+        .weekly-row.active {
+            display: table-row;
+        }
+        .weekly-container {
+            background-color: #fafafa;
+            padding: 12px;
+            border-radius: 6px;
+            border: 1px solid #e3e3e3;
+        }
+        .weekly-container h4 {
+            margin: 0 0 8px 0;
+        }
+        .task-edit-form textarea {
+            min-width: 220px;
+        }
+        .project-edit-form {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            width: 100%;
+        }
+        .project-meta p {
+            margin: 4px 0;
+        }
+        .project-form-fields {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 12px;
+            margin-top: 12px;
+        }
+        .project-form-fields .field {
+            display: flex;
+            flex-direction: column;
+        }
+        .project-form-fields label {
+            font-size: 0.85rem;
+            color: #555;
+            margin-bottom: 4px;
+        }
+        .project-form-fields textarea {
+            min-height: 80px;
+        }
+        .project-form-fields select,
+        .project-form-fields input,
+        .project-form-fields textarea {
+            padding: 6px 8px;
+        }
+        .macrostage-list {
+            list-style: none;
+            padding-left: 0;
+            margin-left: 0;
+        }
+        .macrostage-item {
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            padding: 8px 12px;
+            margin-bottom: 12px;
+            background-color: #fff;
+        }
+        .macrostage-item.dragging {
+            opacity: 0.6;
+        }
+        .drag-handle {
+            cursor: grab;
+            margin-right: 8px;
+            font-size: 1.1rem;
+            user-select: none;
+        }
+        .stage-list {
+            list-style: none;
+            padding-left: 0;
+        }
+        .stage-item {
+            border: 1px solid #eee;
+            border-radius: 6px;
+            padding: 8px 10px;
+            margin-bottom: 10px;
+            background-color: #fcfcfc;
+        }
+        .stage-item.dragging {
+            opacity: 0.6;
+        }
+        .task-row.dragging {
+            opacity: 0.6;
+        }
+        .structure-choice {
+            border: 1px dashed #ccc;
+            padding: 12px;
+            margin: 12px 0;
+            background-color: #fdfdfd;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+        .structure-choice p {
+            margin: 0;
+        }
+        .structure-choice form {
+            display: inline;
+        }
+        .stage-type-choice {
+            display: flex;
+            gap: 12px;
+            align-items: center;
+            margin-top: 8px;
+        }
+        .stage-extra-fields {
+            margin-top: 8px;
+            display: none;
+            flex-direction: column;
+            gap: 6px;
+        }
+        button.danger {
+            background-color: #ffe5e5;
+            border: 1px solid #dd6666;
+            color: #a30000;
+        }
+        button.danger:hover {
+            background-color: #ffd4d4;
+        }
+    </style>
+</head>
+<body>
+<div class="container">
+    <header>
+        <h1>Cronograma de Projetos (PoC)</h1>
+        <nav class="breadcrumbs">
+            <a href="{{ url_for('list_projects') }}">Projetos</a>
+            {% block breadcrumbs %}{% endblock %}
+        </nav>
+        <hr>
+    </header>
+
+    {% block content %}{% endblock %}
+</div>
+<script>
+document.addEventListener("DOMContentLoaded", function () {
+    function focusFirstInput(target) {
+        const focusable = target.querySelector("input, textarea");
+        if (focusable) {
+            focusable.focus();
+            if (focusable.select) {
+                focusable.select();
+            }
+        }
+    }
+
+    document.querySelectorAll("[data-toggle-target]").forEach(function (trigger) {
+        trigger.addEventListener("click", function () {
+            const targetId = trigger.getAttribute("data-toggle-target");
+            const target = document.getElementById(targetId);
+            if (!target) {
+                return;
+            }
+            target.classList.toggle("active");
+            if (target.classList.contains("active")) {
+                focusFirstInput(target);
+            }
+        });
+    });
+
+    document.querySelectorAll("[data-cancel-target]").forEach(function (button) {
+        button.addEventListener("click", function () {
+            const targetId = button.getAttribute("data-cancel-target");
+            const target = document.getElementById(targetId);
+            if (target) {
+                target.classList.remove("active");
+            }
+        });
+    });
+
+    document.querySelectorAll(".stage-type-form").forEach(function (form) {
+        const extraFields = form.querySelector("[data-stage-extra]");
+        if (!extraFields) {
+            return;
+        }
+        function updateExtraFields() {
+            const selected = form.querySelector("input[name='stage_type']:checked");
+            if (selected && (selected.value === "robô" || selected.value === "sistema")) {
+                extraFields.style.display = "flex";
+            } else {
+                extraFields.style.display = "none";
+            }
+        }
+        updateExtraFields();
+        form.querySelectorAll("input[name='stage_type']").forEach(function (radio) {
+            radio.addEventListener("change", updateExtraFields);
+        });
+    });
+});
+</script>
+{% block extra_scripts %}{% endblock %}
+</body>
+</html>
