@@ -8,24 +8,33 @@ Execução:
     - Acesse: http://127.0.0.1:5000
 """
 
-from datetime import datetime
-from flask import Flask, render_template, redirect, url_for, request, abort
+from datetime import datetime, date, timedelta
+from urllib.parse import quote
+from flask import Flask, render_template, redirect, url_for, request, abort, send_file, make_response, flash
+from sqlalchemy import or_, and_
+from sqlalchemy.orm import joinedload
 from models import db, Project, MacroStage, Stage, Task, WeeklyUpdate
+from openpyxl import Workbook
+from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+from openpyxl.utils import get_column_letter
+from io import BytesIO
+import re
 
 app = Flask(__name__)
 app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///schedule.db"
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+app.config["SECRET_KEY"] = "dev-secret-key-change-in-production"  # Necessário para flash messages
 
 # Inicializa o objeto db com o app
 db.init_app(app)
 
 
 PROJECT_STATUS_CHOICES = [
-    "a iniciar",
-    "em andamento",
-    "concluído",
-    "suspenso",
-    "descartado",
+    "A iniciar",
+    "Em andamento",
+    "Concluído",
+    "Suspenso",
+    "Descartado",
 ]
 
 MACRO_STRUCTURE_CHOICES = {"stages", "tasks"}
@@ -57,6 +66,216 @@ def parse_date_field(raw_value: str):
         return datetime.strptime(raw_value, "%Y-%m-%d").date()
     except ValueError:
         return None
+
+
+def validate_task_dates(start_date, end_date):
+    """
+    Valida que a data de início nunca seja maior que a data de fim.
+    As datas podem ser iguais (coincidir).
+    
+    Args:
+        start_date: Data de início (date ou None)
+        end_date: Data de fim (date ou None)
+    
+    Returns:
+        tuple: (is_valid: bool, error_message: str ou None)
+    """
+    # Se ambas as datas estão presentes, valida
+    if start_date is not None and end_date is not None:
+        if start_date > end_date:
+            return False, "A data de início não pode ser maior que a data de fim."
+        if end_date < start_date:
+            return False, "A data de fim não pode ser menor que a data de início."
+    
+    return True, None
+
+
+def calculate_project_progress(start_date, end_date, current_date=None):
+    """
+    Calcula o progresso temporal de um projeto em porcentagem.
+    
+    Args:
+        start_date: Data de início do projeto (date ou None)
+        end_date: Data de fim do projeto (date ou None)
+        current_date: Data atual para cálculo (date, padrão: date.today())
+    
+    Returns:
+        int: Porcentagem de progresso (0-100) ou None se não puder calcular
+    """
+    if start_date is None or end_date is None:
+        return None
+    
+    if current_date is None:
+        current_date = date.today()
+    
+    # Se a data atual é anterior ao início, retorna 0%
+    if current_date < start_date:
+        return 0
+    
+    # Se a data atual é posterior ao fim, retorna 100%
+    if current_date > end_date:
+        return 100
+    
+    # Se início e fim são iguais, retorna 100%
+    if start_date == end_date:
+        return 100
+    
+    # Calcula o progresso: (atual - início) / (fim - início) * 100
+    total_days = (end_date - start_date).days
+    elapsed_days = (current_date - start_date).days
+    
+    if total_days == 0:
+        return 100
+    
+    progress = int((elapsed_days / total_days) * 100)
+    
+    # Garante que está entre 0 e 100
+    return max(0, min(100, progress))
+
+
+def calculate_automatic_status(project: Project) -> str:
+    """
+    Calcula o status automático de um projeto baseado em suas datas de início e fim.
+    
+    Regras:
+        - "A iniciar": start_date é None (sem tarefas) OU start_date > hoje
+        - "Em andamento": start_date <= hoje <= end_date (projeto iniciou e ainda não terminou)
+        - "Concluído": end_date não é None E end_date < hoje (projeto já terminou)
+    
+    Args:
+        project: Projeto para calcular o status
+    
+    Returns:
+        str: Status calculado ("A iniciar", "Em andamento" ou "Concluído")
+    """
+    today = date.today()
+    
+    # Se não há data de início (sem tarefas), está "a iniciar"
+    if project.start_date is None:
+        return "A iniciar"
+    
+    # Se a data de início é no futuro, está "a iniciar"
+    if project.start_date > today:
+        return "A iniciar"
+    
+    # Se há data de fim e já passou, está "concluído"
+    if project.end_date is not None and project.end_date < today:
+        return "Concluído"
+    
+    # Se está entre início e fim (ou sem fim definido mas já iniciou), está "em andamento"
+    if project.start_date <= today:
+        if project.end_date is None or project.end_date >= today:
+            return "Em andamento"
+    
+    # Fallback: se chegou aqui, considera "em andamento"
+    return "Em andamento"
+
+
+def get_project_status(project: Project) -> dict:
+    """
+    Retorna o status efetivo de um projeto (manual ou automático).
+    
+    Args:
+        project: Projeto para obter o status
+    
+    Returns:
+        dict: {
+            'value': str - status atual (manual ou automático),
+            'is_manual': bool - indica se é manual,
+            'display_text': str - texto formatado para exibição
+        }
+    """
+    if project.status_manual and project.status_manual_value:
+        # Status manual
+        return {
+            'value': project.status_manual_value,
+            'is_manual': True,
+            'display_text': f"{project.status_manual_value}"
+        }
+    else:
+        # Status automático
+        automatic_status = calculate_automatic_status(project)
+        return {
+            'value': automatic_status,
+            'is_manual': False,
+            'display_text': automatic_status
+        }
+
+
+def calculate_stage_status(stage: Stage) -> str:
+    """
+    Calcula o status de uma etapa (robô/sistema) baseado nas tarefas associadas.
+    
+    Regras:
+        - "A iniciar": nenhuma tarefa OU todas as tarefas têm start_date > hoje
+        - "Em andamento": pelo menos uma tarefa com start_date ≤ hoje E 
+          ainda existe pelo menos uma tarefa futura (start_date > hoje OU end_date > hoje)
+        - "Concluído": todas as tarefas têm end_date ≤ hoje
+    
+    Args:
+        stage: Etapa para calcular o status
+    
+    Returns:
+        str: Status calculado ("A iniciar", "Em andamento" ou "Concluído")
+    """
+    today = date.today()
+    tasks = stage.tasks
+    
+    # Caso B: Nenhuma tarefa ou todas as tarefas começam no futuro
+    if not tasks:
+        return "A iniciar"
+    
+    # Coleta todas as datas de início e fim válidas
+    start_dates = [t.start_date for t in tasks if t.start_date is not None]
+    end_dates = [t.end_date for t in tasks if t.end_date is not None]
+    
+    # Se não há datas de início válidas, considera "A iniciar"
+    if not start_dates:
+        return "A iniciar"
+    
+    # Se todas as tarefas começam no futuro
+    if all(sd > today for sd in start_dates):
+        return "A iniciar"
+    
+    # Caso D: Todas as tarefas terminaram (todas têm end_date e todas são <= hoje)
+    if end_dates and len(end_dates) == len(tasks) and all(ed <= today for ed in end_dates):
+        return "Concluído"
+    
+    # Caso C: Pelo menos uma tarefa já começou E ainda há tarefas futuras
+    has_started = any(sd <= today for sd in start_dates)
+    
+    # Verifica se ainda há tarefas futuras
+    # Uma tarefa é futura se: start_date > hoje OU end_date > hoje OU (start_date <= hoje mas end_date é None)
+    has_future = False
+    for task in tasks:
+        # Tarefa futura se começa no futuro
+        if task.start_date and task.start_date > today:
+            has_future = True
+            break
+        # Tarefa futura se termina no futuro
+        if task.end_date and task.end_date > today:
+            has_future = True
+            break
+        # Tarefa futura se já começou mas não tem data de fim (ainda em andamento)
+        if task.start_date and task.start_date <= today and task.end_date is None:
+            has_future = True
+            break
+    
+    # Se pelo menos uma começou e ainda há tarefas futuras, está "Em andamento"
+    if has_started and has_future:
+        return "Em andamento"
+    
+    # Se pelo menos uma começou mas não há tarefas futuras, todas terminaram
+    if has_started:
+        # Se todas as tarefas têm end_date e todas terminaram
+        if end_dates and len(end_dates) == len(tasks) and all(ed <= today for ed in end_dates):
+            return "Concluído"
+        # Caso contrário, ainda está em andamento
+        return "Em andamento"
+    
+    # Fallback: considera "Em andamento"
+    return "Em andamento"
+
 
 # --------------------------
 # Funções auxiliares de datas
@@ -132,6 +351,20 @@ def recalculate_project(project: Project) -> None:
     project.end_date = max(end_dates) if end_dates else None
 
 
+def recalculate_project_status(project: Project) -> None:
+    """
+    Recalcula o status automático de um projeto.
+    Só atualiza se o status não for manual.
+    """
+    if project is None:
+        return
+    
+    # Só recalcula se não for status manual
+    if not project.status_manual:
+        automatic_status = calculate_automatic_status(project)
+        project.status = automatic_status
+
+
 def recalculate_all_from_stage(stage: Stage) -> None:
     """
     A partir de uma Etapa (Stage), recalcula em cadeia:
@@ -150,6 +383,7 @@ def recalculate_all_from_stage(stage: Stage) -> None:
     recalculate_stage(stage)
     recalculate_macrostage(macrostage)
     recalculate_project(project)
+    recalculate_project_status(project)
 
     db.session.commit()
 
@@ -162,8 +396,208 @@ def recalculate_all_from_macrostage(macrostage: MacroStage) -> None:
 
     recalculate_macrostage(macrostage)
     recalculate_project(project)
+    recalculate_project_status(project)
 
     db.session.commit()
+
+
+# --------------------------
+# Funções auxiliares para ajuste automático de tarefas
+# --------------------------
+
+def calculate_task_shift_delta(old_start_date, old_end_date, new_start_date, new_end_date):
+    """
+    Calcula o delta de dias de deslocamento de uma tarefa.
+    
+    Regras:
+        - Prioridade: end_date > start_date
+        - Se end_date mudou: delta_days = (new_end_date - old_end_date).days
+        - Senão, se start_date mudou: delta_days = (new_start_date - old_start_date).days
+        - Se ambos mudaram mas delta é diferente, usar end_date
+        - Retorna (delta_days, old_start_date) - sempre usa start_date como referência para tarefas subsequentes
+    
+    Args:
+        old_start_date: Data de início antiga (date ou None)
+        old_end_date: Data de fim antiga (date ou None)
+        new_start_date: Data de início nova (date ou None)
+        new_end_date: Data de fim nova (date ou None)
+    
+    Returns:
+        tuple: (delta_days: int, reference_start_date: date ou None)
+    """
+    # Se end_date mudou, calcula delta baseado em end_date
+    if old_end_date is not None and new_end_date is not None:
+        delta_end = (new_end_date - old_end_date).days
+        if delta_end != 0:
+            # Usa old_start_date como referência (tarefas subsequentes são baseadas em start_date)
+            return delta_end, old_start_date
+    
+    # Se end_date não mudou ou não existe, verifica start_date
+    if old_start_date is not None and new_start_date is not None:
+        delta_start = (new_start_date - old_start_date).days
+        if delta_start != 0:
+            # Usa start_date antiga como referência
+            return delta_start, old_start_date
+    
+    # Se ambos mudaram mas delta é diferente, prioriza end_date para o cálculo do delta
+    if (old_end_date is not None and new_end_date is not None and
+        old_start_date is not None and new_start_date is not None):
+        delta_end = (new_end_date - old_end_date).days
+        delta_start = (new_start_date - old_start_date).days
+        if delta_end != 0 and delta_start != 0 and delta_end != delta_start:
+            # Usa delta_end mas old_start_date como referência
+            return delta_end, old_start_date
+    
+    # Nenhum deslocamento detectado
+    return 0, None
+
+
+def find_subsequent_tasks(project_id, reference_start_date, exclude_task_id):
+    """
+    Encontra todas as tarefas subsequentes de um projeto que devem ser deslocadas.
+    
+    Uma tarefa é considerada subsequente se:
+        - Pertence ao mesmo projeto
+        - start_date > reference_start_date (data de início da tarefa editada)
+        - Não é a tarefa excluída (exclude_task_id)
+    
+    Args:
+        project_id: ID do projeto
+        reference_start_date: Data de início de referência (date) - data de início antiga da tarefa editada
+        exclude_task_id: ID da tarefa a excluir da busca
+    
+    Returns:
+        list: Lista de tarefas ordenadas por start_date e position
+    """
+    if reference_start_date is None:
+        return []
+    
+    # Busca todas as tarefas do projeto com start_date > reference_start_date
+    tasks = Task.query.join(MacroStage).filter(
+        MacroStage.project_id == project_id,
+        Task.start_date.isnot(None),
+        Task.start_date > reference_start_date,
+        Task.id != exclude_task_id
+    ).order_by(Task.start_date, Task.position).all()
+    
+    return tasks
+
+
+# --------------------------
+# Funções auxiliares para Excel
+# --------------------------
+
+def format_excel_header(worksheet, row, num_cols):
+    """
+    Formata a linha de cabeçalho do Excel.
+    
+    Args:
+        worksheet: Planilha do openpyxl
+        row: Número da linha (1-indexed)
+        num_cols: Número de colunas a formatar
+    """
+    header_fill = PatternFill(start_color="E0E0E0", end_color="E0E0E0", fill_type="solid")
+    header_font = Font(bold=True)
+    header_alignment = Alignment(horizontal="center", vertical="center")
+    thin_border = Border(
+        left=Side(style='thin'),
+        right=Side(style='thin'),
+        top=Side(style='thin'),
+        bottom=Side(style='thin')
+    )
+    
+    for col in range(1, num_cols + 1):
+        cell = worksheet.cell(row=row, column=col)
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.alignment = header_alignment
+        cell.border = thin_border
+
+
+def format_excel_date(cell, date_value):
+    """
+    Formata uma célula com data no formato brasileiro (dd/mm/yyyy).
+    
+    Args:
+        cell: Célula do openpyxl
+        date_value: Objeto date ou None
+    """
+    if date_value:
+        cell.value = date_value.strftime("%d/%m/%Y")
+        cell.number_format = "DD/MM/YYYY"
+    else:
+        cell.value = "—"
+
+
+def auto_adjust_column_width(worksheet):
+    """
+    Ajusta automaticamente a largura das colunas baseado no conteúdo.
+    
+    Args:
+        worksheet: Planilha do openpyxl
+    """
+    for column in worksheet.columns:
+        max_length = 0
+        column_letter = get_column_letter(column[0].column)
+        
+        for cell in column:
+            try:
+                if cell.value:
+                    max_length = max(max_length, len(str(cell.value)))
+            except:
+                pass
+        
+        # Ajusta largura com margem
+        adjusted_width = min(max_length + 2, 50)  # Máximo de 50 caracteres
+        worksheet.column_dimensions[column_letter].width = adjusted_width
+
+
+def create_excel_response(workbook, filename):
+    """
+    Cria uma resposta HTTP para download do arquivo Excel.
+    
+    Args:
+        workbook: Workbook do openpyxl
+        filename: Nome do arquivo (sem extensão .xlsx)
+    
+    Returns:
+        Response do Flask para download
+    """
+    # Gera arquivo em memória
+    output = BytesIO()
+    workbook.save(output)
+    output.seek(0)
+    
+    # Cria resposta HTTP
+    response = make_response(send_file(
+        output,
+        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        as_attachment=True,
+        download_name=f"{filename}.xlsx"
+    ))
+    
+    return response
+
+
+def sanitize_filename(name):
+    """
+    Remove caracteres inválidos de um nome de arquivo.
+    
+    Args:
+        name: Nome original
+    
+    Returns:
+        Nome sanitizado
+    """
+    # Remove caracteres inválidos para nomes de arquivo
+    sanitized = re.sub(r'[<>:"/\\|?*]', '_', name)
+    # Remove espaços múltiplos
+    sanitized = re.sub(r'\s+', '_', sanitized)
+    # Remove underscores múltiplos
+    sanitized = re.sub(r'_+', '_', sanitized)
+    # Remove underscores no início e fim
+    sanitized = sanitized.strip('_')
+    return sanitized
 
 
 # --------------
@@ -185,6 +619,1153 @@ def list_projects():
     """
     projects = Project.query.order_by(Project.id).all()
     return render_template("projects.html", projects=projects)
+
+
+@app.route("/dashboard/projects", methods=["GET"])
+def dashboard_projects():
+    """
+    Dashboard geral de projetos com filtros avançados.
+    Permite filtrar por status, órgão demandante, setor interno, coordenador,
+    equipe Automatiza, gestor responsável, tipo de projeto (robô/sistema) e ferramentas.
+    """
+    # Lê parâmetros de filtro da query string (suporta múltiplos valores)
+    status_filters = [s.strip() for s in request.args.getlist("status") if s.strip()]
+    requesting_agency_filters = [a.strip() for a in request.args.getlist("requesting_agency") if a.strip()]
+    internal_department_filters = [d.strip() for d in request.args.getlist("internal_department") if d.strip()]
+    coordinator_filters = [c.strip() for c in request.args.getlist("coordinator") if c.strip()]
+    automation_support_filters = [a.strip() for a in request.args.getlist("automation_support") if a.strip()]
+    sponsoring_manager_filters = [m.strip() for m in request.args.getlist("sponsoring_manager") if m.strip()]
+    project_type_filters = [p.strip() for p in request.args.getlist("project_type") if p.strip()]
+    # Compatibilidade: se não houver lista, tenta valor único (ignora "all" que significa "todos")
+    if not project_type_filters:
+        single_project_type = request.args.get("project_type", "").strip()
+        if single_project_type and single_project_type != "all":
+            project_type_filters = [single_project_type]
+    tools_filter = request.args.get("tools", "").strip() or None
+    progress_sort = request.args.get("progress_sort", "").strip() or None
+
+    # Inicia query base
+    query = Project.query
+
+    # Aplica filtros diretos em Project (multi-select)
+    if requesting_agency_filters:
+        query = query.filter(Project.requesting_agency.in_(requesting_agency_filters))
+    if internal_department_filters:
+        query = query.filter(Project.internal_department.in_(internal_department_filters))
+    if coordinator_filters:
+        query = query.filter(Project.coordinator.in_(coordinator_filters))
+    if automation_support_filters:
+        query = query.filter(Project.automation_support.in_(automation_support_filters))
+    if sponsoring_manager_filters:
+        query = query.filter(Project.sponsoring_manager.in_(sponsoring_manager_filters))
+
+    # Filtro por tipo de projeto (robô/sistema) - multi-select
+    if project_type_filters:
+        # Subquery para projetos com etapas do tipo "robô"
+        robot_projects = db.session.query(Project.id).join(MacroStage).join(Stage).filter(
+            Stage.stage_type == "robô"
+        ).distinct().subquery()
+
+        # Subquery para projetos com etapas do tipo "sistema"
+        system_projects = db.session.query(Project.id).join(MacroStage).join(Stage).filter(
+            Stage.stage_type == "sistema"
+        ).distinct().subquery()
+
+        # Lógica para múltiplos tipos selecionados
+        project_type_conditions = []
+        
+        if "robot" in project_type_filters:
+            project_type_conditions.append(Project.id.in_(db.session.query(robot_projects.c.id)))
+        if "system" in project_type_filters:
+            project_type_conditions.append(Project.id.in_(db.session.query(system_projects.c.id)))
+        if "both" in project_type_filters:
+            # Projetos que aparecem em ambas as subqueries
+            project_type_conditions.append(
+                and_(
+                    Project.id.in_(db.session.query(robot_projects.c.id)),
+                    Project.id.in_(db.session.query(system_projects.c.id))
+                )
+            )
+        if "none" in project_type_filters:
+            # Projetos que não aparecem em nenhuma das subqueries
+            project_type_conditions.append(
+                and_(
+                    ~Project.id.in_(db.session.query(robot_projects.c.id)),
+                    ~Project.id.in_(db.session.query(system_projects.c.id))
+                )
+            )
+        
+        # Se houver condições, aplica com OR (projeto pode atender qualquer uma)
+        if project_type_conditions:
+            if len(project_type_conditions) == 1:
+                query = query.filter(project_type_conditions[0])
+            else:
+                query = query.filter(or_(*project_type_conditions))
+
+    # Filtro por ferramentas/sistemas
+    if tools_filter:
+        # Usa subquery para evitar conflitos com outros filtros
+        tools_projects = db.session.query(Project.id).join(MacroStage).join(Stage).filter(
+            or_(
+                Stage.tools.like(f"%{tools_filter}%"),
+                Stage.other_tools.like(f"%{tools_filter}%")
+            )
+        ).distinct().subquery()
+        query = query.filter(Project.id.in_(db.session.query(tools_projects.c.id)))
+
+    # Ordena e executa a query
+    projects = query.order_by(Project.id).all()
+
+    # Coleta valores distintos para popular os selects dos filtros
+    # Para status, calcula o status efetivo de todos os projetos para ter a lista completa
+    # (não usa o campo status do banco, pois pode estar desatualizado)
+    all_projects_for_status = Project.query.all()
+    calculated_statuses = set()
+    for p in all_projects_for_status:
+        status_info = get_project_status(p)
+        calculated_statuses.add(status_info['value'])
+    
+    filter_options = {
+        "statuses": sorted(list(calculated_statuses)),
+        "requesting_agencies": sorted([
+            a[0] for a in Project.query.with_entities(Project.requesting_agency).distinct()
+            .filter(Project.requesting_agency.isnot(None)).all()
+        ]),
+        "internal_departments": sorted([
+            d[0] for d in Project.query.with_entities(Project.internal_department).distinct()
+            .filter(Project.internal_department.isnot(None)).all()
+        ]),
+        "coordinators": sorted([
+            c[0] for c in Project.query.with_entities(Project.coordinator).distinct()
+            .filter(Project.coordinator.isnot(None)).all()
+        ]),
+        "automation_supports": sorted([
+            a[0] for a in Project.query.with_entities(Project.automation_support).distinct()
+            .filter(Project.automation_support.isnot(None)).all()
+        ]),
+        "sponsoring_managers": sorted([
+            m[0] for m in Project.query.with_entities(Project.sponsoring_manager).distinct()
+            .filter(Project.sponsoring_manager.isnot(None)).all()
+        ]),
+    }
+
+    # Calcula o status efetivo e progresso para cada projeto (garantindo consistência)
+    projects_with_status = []
+    for project in projects:
+        project_status = get_project_status(project)
+        # Calcula progresso usando a mesma lógica de project_detail()
+        # Se status for manual, não calcular progresso
+        if project_status['is_manual']:
+            progresso_percentual = None
+        else:
+            progresso_percentual = calculate_project_progress(project.start_date, project.end_date)
+        
+        projects_with_status.append({
+            'project': project,
+            'status': project_status['value'],
+            'status_display': project_status['display_text'],
+            'progress': progresso_percentual
+        })
+    
+    # Aplica filtro de status após calcular status efetivo (multi-select)
+    if status_filters:
+        projects_with_status = [
+            item for item in projects_with_status 
+            if item['status'] in status_filters
+        ]
+    
+    # Passa os valores atuais dos filtros para manter selecionados no template (como listas)
+    current_filters = {
+        "status": status_filters,
+        "requesting_agency": requesting_agency_filters,
+        "internal_department": internal_department_filters,
+        "coordinator": coordinator_filters,
+        "automation_support": automation_support_filters,
+        "sponsoring_manager": sponsoring_manager_filters,
+        "project_type": project_type_filters,
+        "tools": tools_filter or "",
+        "progress_sort": progress_sort or "",
+    }
+    
+    # Aplica ordenação por progresso se solicitado
+    if progress_sort in ("asc", "desc"):
+        # Ordena por progresso, tratando None como -1 (vai para o final em desc, início em asc)
+        def get_sort_key(item):
+            progress = item['progress']
+            if progress is None:
+                return -1 if progress_sort == "desc" else 999
+            return progress
+        
+        projects_with_status.sort(key=get_sort_key, reverse=(progress_sort == "desc"))
+
+    return render_template(
+        "dashboard_projects.html",
+        projects=projects_with_status,
+        filter_options=filter_options,
+        current_filters=current_filters,
+    )
+
+
+@app.route("/dashboard/projects/export", methods=["GET"])
+def export_dashboard_projects():
+    """
+    Exporta o dashboard de projetos para Excel (.xlsx).
+    Reutiliza toda a lógica de filtros de dashboard_projects().
+    """
+    # Lê parâmetros de filtro da query string (suporta múltiplos valores - mesma lógica do dashboard)
+    status_filters = [s.strip() for s in request.args.getlist("status") if s.strip()]
+    requesting_agency_filters = [a.strip() for a in request.args.getlist("requesting_agency") if a.strip()]
+    internal_department_filters = [d.strip() for d in request.args.getlist("internal_department") if d.strip()]
+    coordinator_filters = [c.strip() for c in request.args.getlist("coordinator") if c.strip()]
+    automation_support_filters = [a.strip() for a in request.args.getlist("automation_support") if a.strip()]
+    sponsoring_manager_filters = [m.strip() for m in request.args.getlist("sponsoring_manager") if m.strip()]
+    project_type_filters = [p.strip() for p in request.args.getlist("project_type") if p.strip()]
+    # Compatibilidade: se não houver lista, tenta valor único (ignora "all" que significa "todos")
+    if not project_type_filters:
+        single_project_type = request.args.get("project_type", "").strip()
+        if single_project_type and single_project_type != "all":
+            project_type_filters = [single_project_type]
+    tools_filter = request.args.get("tools", "").strip() or None
+    progress_sort = request.args.get("progress_sort", "").strip() or None
+
+    # Reutiliza toda a lógica de filtros do dashboard_projects
+    query = Project.query
+
+    if requesting_agency_filters:
+        query = query.filter(Project.requesting_agency.in_(requesting_agency_filters))
+    if internal_department_filters:
+        query = query.filter(Project.internal_department.in_(internal_department_filters))
+    if coordinator_filters:
+        query = query.filter(Project.coordinator.in_(coordinator_filters))
+    if automation_support_filters:
+        query = query.filter(Project.automation_support.in_(automation_support_filters))
+    if sponsoring_manager_filters:
+        query = query.filter(Project.sponsoring_manager.in_(sponsoring_manager_filters))
+
+    # Filtro por tipo de projeto (robô/sistema) - multi-select
+    if project_type_filters:
+        robot_projects = db.session.query(Project.id).join(MacroStage).join(Stage).filter(
+            Stage.stage_type == "robô"
+        ).distinct().subquery()
+        system_projects = db.session.query(Project.id).join(MacroStage).join(Stage).filter(
+            Stage.stage_type == "sistema"
+        ).distinct().subquery()
+
+        # Lógica para múltiplos tipos selecionados
+        project_type_conditions = []
+        
+        if "robot" in project_type_filters:
+            project_type_conditions.append(Project.id.in_(db.session.query(robot_projects.c.id)))
+        if "system" in project_type_filters:
+            project_type_conditions.append(Project.id.in_(db.session.query(system_projects.c.id)))
+        if "both" in project_type_filters:
+            # Projetos que aparecem em ambas as subqueries
+            project_type_conditions.append(
+                and_(
+                    Project.id.in_(db.session.query(robot_projects.c.id)),
+                    Project.id.in_(db.session.query(system_projects.c.id))
+                )
+            )
+        if "none" in project_type_filters:
+            # Projetos que não aparecem em nenhuma das subqueries
+            project_type_conditions.append(
+                and_(
+                    ~Project.id.in_(db.session.query(robot_projects.c.id)),
+                    ~Project.id.in_(db.session.query(system_projects.c.id))
+                )
+            )
+        
+        # Se houver condições, aplica com OR (projeto pode atender qualquer uma)
+        if project_type_conditions:
+            if len(project_type_conditions) == 1:
+                query = query.filter(project_type_conditions[0])
+            else:
+                query = query.filter(or_(*project_type_conditions))
+
+    # Filtro por ferramentas/sistemas
+    if tools_filter:
+        tools_projects = db.session.query(Project.id).join(MacroStage).join(Stage).filter(
+            or_(
+                Stage.tools.like(f"%{tools_filter}%"),
+                Stage.other_tools.like(f"%{tools_filter}%")
+            )
+        ).distinct().subquery()
+        query = query.filter(Project.id.in_(db.session.query(tools_projects.c.id)))
+
+    projects = query.order_by(Project.id).all()
+
+    # Calcula status e progresso para cada projeto
+    projects_with_status = []
+    for project in projects:
+        project_status = get_project_status(project)
+        if project_status['is_manual']:
+            progresso_percentual = None
+        else:
+            progresso_percentual = calculate_project_progress(project.start_date, project.end_date)
+        
+        projects_with_status.append({
+            'project': project,
+            'status': project_status['value'],
+            'status_display': project_status['display_text'],
+            'progress': progresso_percentual
+        })
+    
+    # Aplica filtro de status (multi-select)
+    if status_filters:
+        projects_with_status = [
+            item for item in projects_with_status 
+            if item['status'] in status_filters
+        ]
+    
+    # Aplica ordenação por progresso
+    if progress_sort in ("asc", "desc"):
+        def get_sort_key(item):
+            progress = item['progress']
+            if progress is None:
+                return -1 if progress_sort == "desc" else 999
+            return progress
+        projects_with_status.sort(key=get_sort_key, reverse=(progress_sort == "desc"))
+
+    # Cria Workbook
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Projetos"
+
+    # Cabeçalhos
+    headers = [
+        "Nome do projeto",
+        "Escopo",
+        "Status",
+        "Progresso (%)",
+        "Link do GitHub",
+        "Coordenador",
+        "Equipe Automatiza / Suporte Automatiza",
+        "Órgão demandante",
+        "Setor interno",
+        "Gestor responsável",
+        "Contato do gestor responsável",
+        "Gestor técnico",
+        "Contato do gestor técnico",
+        "Data de início",
+        "Data de fim"
+    ]
+    
+    for col, header in enumerate(headers, start=1):
+        ws.cell(row=1, column=col, value=header)
+    
+    format_excel_header(ws, 1, len(headers))
+
+    # Dados
+    for row_idx, item in enumerate(projects_with_status, start=2):
+        project = item['project']
+        ws.cell(row=row_idx, column=1, value=project.name)
+        ws.cell(row=row_idx, column=2, value=project.scope or "—")
+        ws.cell(row=row_idx, column=3, value=item['status_display'] or "—")
+        
+        # Progresso
+        if item['progress'] is not None:
+            ws.cell(row=row_idx, column=4, value=f"{item['progress']}%")
+        else:
+            ws.cell(row=row_idx, column=4, value="—")
+        
+        ws.cell(row=row_idx, column=5, value=project.github_link or "—")
+        ws.cell(row=row_idx, column=6, value=project.coordinator or "—")
+        ws.cell(row=row_idx, column=7, value=project.automation_support or "—")
+        ws.cell(row=row_idx, column=8, value=project.requesting_agency or "—")
+        ws.cell(row=row_idx, column=9, value=project.internal_department or "—")
+        ws.cell(row=row_idx, column=10, value=project.sponsoring_manager or "—")
+        ws.cell(row=row_idx, column=11, value=project.sponsoring_manager_contact or "—")
+        ws.cell(row=row_idx, column=12, value=project.technical_manager or "—")
+        ws.cell(row=row_idx, column=13, value=project.technical_manager_contact or "—")
+        
+        # Datas
+        format_excel_date(ws.cell(row=row_idx, column=14), project.start_date)
+        format_excel_date(ws.cell(row=row_idx, column=15), project.end_date)
+
+    # Ajusta larguras das colunas
+    auto_adjust_column_width(ws)
+
+    # Gera nome do arquivo com timestamp
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"projetos_{timestamp}"
+
+    return create_excel_response(wb, filename)
+
+
+@app.route("/dashboard/timeline", methods=["GET"])
+def dashboard_timeline():
+    """
+    Dashboard de cronograma (Gantt) mostrando todos os projetos e suas hierarquias
+    (macroetapas, etapas, tarefas) em uma linha do tempo visual.
+    """
+    # Lê parâmetros de filtro da query string (suporta múltiplos valores)
+    status_filters = [s.strip() for s in request.args.getlist("status") if s.strip()]
+    requesting_agency_filters = [a.strip() for a in request.args.getlist("requesting_agency") if a.strip()]
+    coordinator_filters = [c.strip() for c in request.args.getlist("coordinator") if c.strip()]
+    project_type_filters = [p.strip() for p in request.args.getlist("project_type") if p.strip()]
+    # Compatibilidade: se não houver lista, tenta valor único (ignora "all" que significa "todos")
+    if not project_type_filters:
+        single_project_type = request.args.get("project_type", "").strip()
+        if single_project_type and single_project_type != "all":
+            project_type_filters = [single_project_type]
+    date_start_str = request.args.get("date_start", "").strip() or None
+    date_end_str = request.args.get("date_end", "").strip() or None
+
+    # Converte strings de data para objetos date
+    date_start = None
+    date_end = None
+    if date_start_str:
+        try:
+            date_start = datetime.strptime(date_start_str, "%Y-%m-%d").date()
+        except ValueError:
+            date_start = None
+    if date_end_str:
+        try:
+            date_end = datetime.strptime(date_end_str, "%Y-%m-%d").date()
+        except ValueError:
+            date_end = None
+
+    # Inicia query base com eager loading para otimizar
+    query = Project.query.options(
+        joinedload(Project.macrostages).joinedload(MacroStage.stages).joinedload(Stage.tasks),
+        joinedload(Project.macrostages).joinedload(MacroStage.tasks)
+    )
+
+    # Aplica filtros diretos em Project (multi-select)
+    # Nota: filtro de status será aplicado após calcular status efetivo
+    if requesting_agency_filters:
+        query = query.filter(Project.requesting_agency.in_(requesting_agency_filters))
+    if coordinator_filters:
+        query = query.filter(Project.coordinator.in_(coordinator_filters))
+
+    # Filtro por tipo de projeto (robô/sistema) - multi-select
+    if project_type_filters:
+        robot_projects = db.session.query(Project.id).join(MacroStage).join(Stage).filter(
+            Stage.stage_type == "robô"
+        ).distinct().subquery()
+
+        system_projects = db.session.query(Project.id).join(MacroStage).join(Stage).filter(
+            Stage.stage_type == "sistema"
+        ).distinct().subquery()
+
+        # Lógica para múltiplos tipos selecionados
+        project_type_conditions = []
+        
+        if "robot" in project_type_filters:
+            project_type_conditions.append(Project.id.in_(db.session.query(robot_projects.c.id)))
+        if "system" in project_type_filters:
+            project_type_conditions.append(Project.id.in_(db.session.query(system_projects.c.id)))
+        if "both" in project_type_filters:
+            # Projetos que aparecem em ambas as subqueries
+            project_type_conditions.append(
+                and_(
+                    Project.id.in_(db.session.query(robot_projects.c.id)),
+                    Project.id.in_(db.session.query(system_projects.c.id))
+                )
+            )
+        if "none" in project_type_filters:
+            # Projetos que não aparecem em nenhuma das subqueries
+            project_type_conditions.append(
+                and_(
+                    ~Project.id.in_(db.session.query(robot_projects.c.id)),
+                    ~Project.id.in_(db.session.query(system_projects.c.id))
+                )
+            )
+        
+        # Se houver condições, aplica com OR (projeto pode atender qualquer uma)
+        if project_type_conditions:
+            if len(project_type_conditions) == 1:
+                query = query.filter(project_type_conditions[0])
+            else:
+                query = query.filter(or_(*project_type_conditions))
+
+    # Filtro por período (sobreposição)
+    if date_start or date_end:
+        if date_start and date_end:
+            # Projetos que se sobrepõem ao período: start <= date_end AND end >= date_start
+            query = query.filter(
+                and_(
+                    or_(Project.start_date.is_(None), Project.start_date <= date_end),
+                    or_(Project.end_date.is_(None), Project.end_date >= date_start)
+                )
+            )
+        elif date_start:
+            # Projetos que começam antes ou durante o período
+            query = query.filter(
+                or_(Project.start_date.is_(None), Project.start_date <= date_start)
+            )
+        elif date_end:
+            # Projetos que terminam depois ou durante o período
+            query = query.filter(
+                or_(Project.end_date.is_(None), Project.end_date >= date_end)
+            )
+
+    # Ordena por data de início ou nome
+    projects = query.order_by(Project.start_date, Project.name).all()
+
+    # Calcula status efetivo para cada projeto e aplica filtro de status
+    # Nota: filtro de status deve ser aplicado após calcular status efetivo,
+    # pois o status exibido é calculado dinamicamente, não vem do campo do banco
+    projects_with_status = []
+    for project in projects:
+        project_status = get_project_status(project)
+        projects_with_status.append({
+            'project': project,
+            'status': project_status['value']
+        })
+    
+    # Aplica filtro de status após calcular status efetivo (multi-select)
+    if status_filters:
+        projects_with_status = [
+            item for item in projects_with_status 
+            if item['status'] in status_filters
+        ]
+
+    # Constrói estrutura hierárquica para o Gantt
+    timeline_data = []
+
+    for item in projects_with_status:
+        project = item['project']
+        # Só adiciona projeto se tiver datas válidas
+        if not project.start_date or not project.end_date:
+            continue
+
+        project_item = {
+            "id": f"project-{project.id}",
+            "name": project.name,
+            "start": project.start_date.isoformat(),
+            "end": project.end_date.isoformat(),
+            "progress": 0,
+            "dependencies": None,  # frappe-gantt espera None ou array vazio para sem dependências
+            "custom_class": "gantt-project",
+            "url": url_for('project_detail', project_id=project.id),
+        }
+        timeline_data.append(project_item)
+
+        # Adiciona macroetapas
+        for macro in project.macrostages:
+            if not macro.start_date or not macro.end_date:
+                continue
+
+            macro_item = {
+                "id": f"macro-{macro.id}",
+                "name": f"  {macro.name}",  # Indentação visual
+                "start": macro.start_date.isoformat(),
+                "end": macro.end_date.isoformat(),
+                "progress": 0,
+                "dependencies": f"project-{project.id}",
+                "custom_class": "gantt-macro",
+                "url": url_for('project_detail', project_id=project.id) + f"#macrostage-{macro.id}",
+            }
+            timeline_data.append(macro_item)
+
+            # Adiciona etapas (se a macroetapa tiver estrutura_type="stages")
+            if macro.structure_type == "stages":
+                for stage in macro.stages:
+                    if not stage.start_date or not stage.end_date:
+                        continue
+
+                    stage_item = {
+                        "id": f"stage-{stage.id}",
+                        "name": f"    {stage.name}",  # Mais indentado
+                        "start": stage.start_date.isoformat(),
+                        "end": stage.end_date.isoformat(),
+                        "progress": 0,
+                        "dependencies": f"macro-{macro.id}",
+                        "custom_class": "gantt-stage",
+                        "url": url_for('project_detail', project_id=project.id) + f"#stage-{stage.id}",
+                    }
+                    timeline_data.append(stage_item)
+
+                    # Adiciona tarefas da etapa
+                    for task in stage.tasks:
+                        if not task.start_date or not task.end_date:
+                            continue
+
+                        task_item = {
+                            "id": f"task-{task.id}",
+                            "name": f"      {task.name}",  # Ainda mais indentado
+                            "start": task.start_date.isoformat(),
+                            "end": task.end_date.isoformat(),
+                            "progress": 0,
+                            "dependencies": f"stage-{stage.id}",
+                            "custom_class": "gantt-task",
+                            "url": url_for('project_detail', project_id=project.id) + f"#task-{task.id}",
+                        }
+                        timeline_data.append(task_item)
+
+            # Adiciona tarefas diretas da macroetapa (se structure_type="tasks")
+            elif macro.structure_type == "tasks":
+                for task in macro.tasks:
+                    if task.stage_id is not None:  # Ignora tarefas que pertencem a etapas
+                        continue
+                    if not task.start_date or not task.end_date:
+                        continue
+
+                    task_item = {
+                        "id": f"task-{task.id}",
+                        "name": f"    {task.name}",
+                        "start": task.start_date.isoformat(),
+                        "end": task.end_date.isoformat(),
+                        "progress": 0,
+                        "dependencies": f"macro-{macro.id}",
+                        "custom_class": "gantt-task",
+                        "url": url_for('project_detail', project_id=project.id) + f"#task-{task.id}",
+                    }
+                    timeline_data.append(task_item)
+
+    # Coleta valores distintos para popular os selects dos filtros
+    # Para status, calcula o status efetivo de todos os projetos para ter a lista completa
+    # (não usa o campo status do banco, pois pode estar desatualizado)
+    all_projects_for_status = Project.query.all()
+    calculated_statuses = set()
+    for p in all_projects_for_status:
+        status_info = get_project_status(p)
+        calculated_statuses.add(status_info['value'])
+    
+    filter_options = {
+        "statuses": sorted(list(calculated_statuses)),
+        "requesting_agencies": sorted([
+            a[0] for a in Project.query.with_entities(Project.requesting_agency).distinct()
+            .filter(Project.requesting_agency.isnot(None)).all()
+        ]),
+        "coordinators": sorted([
+            c[0] for c in Project.query.with_entities(Project.coordinator).distinct()
+            .filter(Project.coordinator.isnot(None)).all()
+        ]),
+    }
+
+    # Passa os valores atuais dos filtros para manter selecionados no template
+    current_filters = {
+        "status": status_filters,
+        "requesting_agency": requesting_agency_filters,
+        "coordinator": coordinator_filters,
+        "project_type": project_type_filters,
+        "date_start": date_start_str or "",
+        "date_end": date_end_str or "",
+    }
+
+    return render_template(
+        "dashboard_timeline.html",
+        timeline_data=timeline_data,
+        filter_options=filter_options,
+        current_filters=current_filters,
+    )
+
+
+@app.route("/dashboard/timeline/export", methods=["GET"])
+def export_dashboard_timeline():
+    """
+    Exporta o dashboard de cronograma para Excel (.xlsx).
+    Reutiliza toda a lógica de filtros de dashboard_timeline().
+    """
+    # Lê parâmetros de filtro da query string (suporta múltiplos valores)
+    status_filters = [s.strip() for s in request.args.getlist("status") if s.strip()]
+    requesting_agency_filters = [a.strip() for a in request.args.getlist("requesting_agency") if a.strip()]
+    coordinator_filters = [c.strip() for c in request.args.getlist("coordinator") if c.strip()]
+    project_type_filters = [p.strip() for p in request.args.getlist("project_type") if p.strip()]
+    # Compatibilidade: se não houver lista, tenta valor único (ignora "all" que significa "todos")
+    if not project_type_filters:
+        single_project_type = request.args.get("project_type", "").strip()
+        if single_project_type and single_project_type != "all":
+            project_type_filters = [single_project_type]
+    date_start_str = request.args.get("date_start", "").strip() or None
+    date_end_str = request.args.get("date_end", "").strip() or None
+
+    # Converte strings de data para objetos date
+    date_start = None
+    date_end = None
+    if date_start_str:
+        try:
+            date_start = datetime.strptime(date_start_str, "%Y-%m-%d").date()
+        except ValueError:
+            pass
+    if date_end_str:
+        try:
+            date_end = datetime.strptime(date_end_str, "%Y-%m-%d").date()
+        except ValueError:
+            pass
+
+    # Reutiliza lógica de filtros do dashboard_timeline
+    query = Project.query
+
+    if requesting_agency_filters:
+        query = query.filter(Project.requesting_agency.in_(requesting_agency_filters))
+    if coordinator_filters:
+        query = query.filter(Project.coordinator.in_(coordinator_filters))
+
+    # Filtro por tipo de projeto (robô/sistema) - multi-select
+    if project_type_filters:
+        robot_projects = db.session.query(Project.id).join(MacroStage).join(Stage).filter(
+            Stage.stage_type == "robô"
+        ).distinct().subquery()
+        system_projects = db.session.query(Project.id).join(MacroStage).join(Stage).filter(
+            Stage.stage_type == "sistema"
+        ).distinct().subquery()
+
+        # Lógica para múltiplos tipos selecionados
+        project_type_conditions = []
+        
+        if "robot" in project_type_filters:
+            project_type_conditions.append(Project.id.in_(db.session.query(robot_projects.c.id)))
+        if "system" in project_type_filters:
+            project_type_conditions.append(Project.id.in_(db.session.query(system_projects.c.id)))
+        if "both" in project_type_filters:
+            # Projetos que aparecem em ambas as subqueries
+            project_type_conditions.append(
+                and_(
+                    Project.id.in_(db.session.query(robot_projects.c.id)),
+                    Project.id.in_(db.session.query(system_projects.c.id))
+                )
+            )
+        if "none" in project_type_filters:
+            # Projetos que não aparecem em nenhuma das subqueries
+            project_type_conditions.append(
+                and_(
+                    ~Project.id.in_(db.session.query(robot_projects.c.id)),
+                    ~Project.id.in_(db.session.query(system_projects.c.id))
+                )
+            )
+        
+        # Se houver condições, aplica com OR (projeto pode atender qualquer uma)
+        if project_type_conditions:
+            if len(project_type_conditions) == 1:
+                query = query.filter(project_type_conditions[0])
+            else:
+                query = query.filter(or_(*project_type_conditions))
+
+    projects = query.options(
+        joinedload(Project.macrostages).joinedload(MacroStage.stages).joinedload(Stage.tasks),
+        joinedload(Project.macrostages).joinedload(MacroStage.tasks)
+    ).order_by(Project.id).all()
+
+    # Processa dados para exportação (similar ao dashboard_timeline)
+    timeline_data = []
+    for project in projects:
+        project_status = get_project_status(project)
+        
+        # Aplica filtro de status após calcular (multi-select)
+        if status_filters and project_status['value'] not in status_filters:
+            continue
+        
+        # Adiciona projeto
+        if project.start_date and project.end_date:
+            # Verifica filtro de data
+            if date_start and project.end_date < date_start:
+                continue
+            if date_end and project.start_date > date_end:
+                continue
+            
+            project_item = {
+                "name": project.name,
+                "start": project.start_date,
+                "end": project.end_date,
+                "type": "Projeto"
+            }
+            timeline_data.append(project_item)
+
+        # Processa macroetapas
+        for macro in project.macrostages:
+            if not macro.start_date or not macro.end_date:
+                continue
+            
+            # Verifica filtro de data
+            if date_start and macro.end_date < date_start:
+                continue
+            if date_end and macro.start_date > date_end:
+                continue
+
+            macro_item = {
+                "name": f"  {macro.name}",
+                "start": macro.start_date,
+                "end": macro.end_date,
+                "type": "Macroetapa",
+                "project": project.name
+            }
+            timeline_data.append(macro_item)
+
+            # Processa etapas
+            if macro.structure_type == "stages":
+                for stage in macro.stages:
+                    if not stage.start_date or not stage.end_date:
+                        continue
+                    
+                    # Verifica filtro de data
+                    if date_start and stage.end_date < date_start:
+                        continue
+                    if date_end and stage.start_date > date_end:
+                        continue
+
+                    stage_item = {
+                        "name": f"    {stage.name}",
+                        "start": stage.start_date,
+                        "end": stage.end_date,
+                        "type": "Etapa",
+                        "project": project.name,
+                        "macro": macro.name
+                    }
+                    timeline_data.append(stage_item)
+
+                    # Processa tarefas da etapa
+                    for task in stage.tasks:
+                        if not task.start_date or not task.end_date:
+                            continue
+                        
+                        # Verifica filtro de data
+                        if date_start and task.end_date < date_start:
+                            continue
+                        if date_end and task.start_date > date_end:
+                            continue
+
+                        task_item = {
+                            "name": f"      {task.name}",
+                            "start": task.start_date,
+                            "end": task.end_date,
+                            "type": "Tarefa",
+                            "project": project.name,
+                            "macro": macro.name,
+                            "stage": stage.name
+                        }
+                        timeline_data.append(task_item)
+
+            # Processa tarefas diretas da macroetapa
+            elif macro.structure_type == "tasks":
+                for task in macro.tasks:
+                    if task.stage_id is not None:
+                        continue
+                    if not task.start_date or not task.end_date:
+                        continue
+                    
+                    # Verifica filtro de data
+                    if date_start and task.end_date < date_start:
+                        continue
+                    if date_end and task.start_date > date_end:
+                        continue
+
+                    task_item = {
+                        "name": f"    {task.name}",
+                        "start": task.start_date,
+                        "end": task.end_date,
+                        "type": "Tarefa",
+                        "project": project.name,
+                        "macro": macro.name
+                    }
+                    timeline_data.append(task_item)
+
+    # Cria Workbook
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Cronograma"
+
+    # Cabeçalhos
+    headers = [
+        "Projeto",
+        "Macroetapa",
+        "Etapa",
+        "Tarefa",
+        "Tipo",
+        "Data de início",
+        "Data de fim",
+        "Duração (dias)"
+    ]
+    
+    for col, header in enumerate(headers, start=1):
+        ws.cell(row=1, column=col, value=header)
+    
+    format_excel_header(ws, 1, len(headers))
+
+    # Dados
+    for row_idx, item in enumerate(timeline_data, start=2):
+        ws.cell(row=row_idx, column=1, value=item.get('project', ''))
+        ws.cell(row=row_idx, column=2, value=item.get('macro', ''))
+        ws.cell(row=row_idx, column=3, value=item.get('stage', ''))
+        
+        # Nome (pode ser tarefa ou outro tipo)
+        name_value = item.get('name', '').strip()
+        if item.get('type') == 'Tarefa':
+            ws.cell(row=row_idx, column=4, value=name_value)
+        else:
+            ws.cell(row=row_idx, column=4, value='')
+        
+        ws.cell(row=row_idx, column=5, value=item.get('type', ''))
+        
+        # Datas
+        format_excel_date(ws.cell(row=row_idx, column=6), item.get('start'))
+        format_excel_date(ws.cell(row=row_idx, column=7), item.get('end'))
+        
+        # Duração em dias
+        if item.get('start') and item.get('end'):
+            duration = (item['end'] - item['start']).days + 1
+            ws.cell(row=row_idx, column=8, value=duration)
+        else:
+            ws.cell(row=row_idx, column=8, value="—")
+
+    # Ajusta larguras das colunas
+    auto_adjust_column_width(ws)
+
+    # Gera nome do arquivo com timestamp
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"cronograma_{timestamp}"
+
+    return create_excel_response(wb, filename)
+
+
+@app.route("/dashboard/robots-systems", methods=["GET"])
+def dashboard_robots_systems():
+    """
+    Dashboard de Robôs e Sistemas.
+    Lista todas as etapas do tipo "robô" ou "sistema" de todos os projetos,
+    com cálculo de status baseado nas tarefas associadas.
+    """
+    # Lê parâmetros de filtro da query string (suporta múltiplos valores)
+    stage_type_filters = [s.strip() for s in request.args.getlist("stage_type_filter") if s.strip()]
+    # Compatibilidade: se não houver lista, tenta valor único (ignora "todos" que significa "todos")
+    if not stage_type_filters:
+        single_stage_type = request.args.get("stage_type_filter", "").strip()
+        if single_stage_type and single_stage_type != "todos":
+            stage_type_filters = [single_stage_type]
+    
+    status_filters = [s.strip() for s in request.args.getlist("status_filter") if s.strip()]
+    # Compatibilidade: se não houver lista, tenta valor único (ignora "todos" que significa "todos")
+    if not status_filters:
+        single_status = request.args.get("status_filter", "").strip()
+        if single_status and single_status != "todos":
+            status_filters = [single_status]
+    
+    project_id_filters = [p.strip() for p in request.args.getlist("project_id") if p.strip()]
+    requesting_agency_filters = [a.strip() for a in request.args.getlist("requesting_agency") if a.strip()]
+    
+    # Inicia query base: busca todas as etapas do tipo robô ou sistema
+    query = Stage.query.join(MacroStage).join(Project).filter(
+        Stage.stage_type.in_(["robô", "sistema"])
+    )
+    
+    # Aplica filtro de tipo de etapa (multi-select)
+    if stage_type_filters:
+        query = query.filter(Stage.stage_type.in_(stage_type_filters))
+    
+    # Aplica filtro de projeto (multi-select)
+    if project_id_filters:
+        try:
+            project_id_ints = [int(p) for p in project_id_filters]
+            query = query.filter(Project.id.in_(project_id_ints))
+        except ValueError:
+            pass  # Ignora se não for um número válido
+    
+    # Aplica filtro de órgão demandante (multi-select)
+    if requesting_agency_filters:
+        query = query.filter(Project.requesting_agency.in_(requesting_agency_filters))
+    
+    # Carrega relacionamentos necessários
+    stages = query.options(
+        joinedload(Stage.macrostage).joinedload(MacroStage.project),
+        joinedload(Stage.tasks)
+    ).order_by(Project.name, MacroStage.name, Stage.name).all()
+    
+    # Processa cada etapa: calcula datas agregadas e status
+    robots_and_systems = []
+    for stage in stages:
+        # Calcula datas agregadas das tarefas
+        tasks = stage.tasks
+        start_dates = [t.start_date for t in tasks if t.start_date is not None]
+        end_dates = [t.end_date for t in tasks if t.end_date is not None]
+        
+        etapa_start_date = min(start_dates) if start_dates else None
+        etapa_end_date = max(end_dates) if end_dates else None
+        
+        # Calcula status baseado nas tarefas
+        calculated_status = calculate_stage_status(stage)
+        
+        # Aplica filtro de status (multi-select)
+        if status_filters:
+            if calculated_status not in status_filters:
+                continue
+        
+        # Monta estrutura de dados
+        robots_and_systems.append({
+            "id": stage.id,
+            "stage_name": stage.name,
+            "stage_type": stage.stage_type,
+            "project_id": stage.macrostage.project.id,
+            "project_name": stage.macrostage.project.name,
+            "macrostage_name": stage.macrostage.name,
+            "scope": stage.scope,
+            "tools": stage.tools,
+            "other_tools": stage.other_tools,
+            "start_date": etapa_start_date,
+            "end_date": etapa_end_date,
+            "status": calculated_status,
+        })
+    
+    # Coleta valores distintos para popular os selects dos filtros
+    # Projetos que possuem robôs/sistemas
+    projects_with_robots = db.session.query(Project.id, Project.name).join(
+        MacroStage
+    ).join(Stage).filter(
+        Stage.stage_type.in_(["robô", "sistema"])
+    ).distinct().order_by(Project.name).all()
+    
+    # Órgãos demandantes dos projetos que possuem robôs/sistemas
+    requesting_agencies = db.session.query(Project.requesting_agency).join(
+        MacroStage
+    ).join(Stage).filter(
+        Stage.stage_type.in_(["robô", "sistema"]),
+        Project.requesting_agency.isnot(None)
+    ).distinct().order_by(Project.requesting_agency).all()
+    requesting_agencies = [a[0] for a in requesting_agencies]
+    
+    # Passa os valores atuais dos filtros para manter selecionados no template (como listas)
+    current_filters = {
+        "stage_type": stage_type_filters,
+        "status": status_filters,
+        "project_id": project_id_filters,
+        "requesting_agency": requesting_agency_filters,
+    }
+    
+    return render_template(
+        "dashboard_robots_systems.html",
+        robots_and_systems=robots_and_systems,
+        filter_options={
+            "projects": projects_with_robots,
+            "requesting_agencies": requesting_agencies,
+        },
+        current_filters=current_filters,
+    )
+
+
+@app.route("/dashboard/robots-systems/export", methods=["GET"])
+def export_dashboard_robots_systems():
+    """
+    Exporta o dashboard de robôs e sistemas para Excel (.xlsx).
+    Reutiliza toda a lógica de filtros de dashboard_robots_systems().
+    """
+    # Lê parâmetros de filtro da query string (suporta múltiplos valores)
+    stage_type_filters = [s.strip() for s in request.args.getlist("stage_type_filter") if s.strip()]
+    # Compatibilidade: se não houver lista, tenta valor único (ignora "todos" que significa "todos")
+    if not stage_type_filters:
+        single_stage_type = request.args.get("stage_type_filter", "").strip()
+        if single_stage_type and single_stage_type != "todos":
+            stage_type_filters = [single_stage_type]
+    
+    status_filters = [s.strip() for s in request.args.getlist("status_filter") if s.strip()]
+    # Compatibilidade: se não houver lista, tenta valor único (ignora "todos" que significa "todos")
+    if not status_filters:
+        single_status = request.args.get("status_filter", "").strip()
+        if single_status and single_status != "todos":
+            status_filters = [single_status]
+    
+    project_id_filters = [p.strip() for p in request.args.getlist("project_id") if p.strip()]
+    requesting_agency_filters = [a.strip() for a in request.args.getlist("requesting_agency") if a.strip()]
+    
+    # Inicia query base
+    query = Stage.query.join(MacroStage).join(Project).filter(
+        Stage.stage_type.in_(["robô", "sistema"])
+    )
+    
+    # Aplica filtros (multi-select)
+    if stage_type_filters and "todos" not in stage_type_filters:
+        query = query.filter(Stage.stage_type.in_(stage_type_filters))
+    
+    if project_id_filters:
+        try:
+            project_id_ints = [int(p) for p in project_id_filters]
+            query = query.filter(Project.id.in_(project_id_ints))
+        except ValueError:
+            pass
+    
+    if requesting_agency_filters:
+        query = query.filter(Project.requesting_agency.in_(requesting_agency_filters))
+    
+    stages = query.options(
+        joinedload(Stage.macrostage).joinedload(MacroStage.project),
+        joinedload(Stage.tasks)
+    ).order_by(Project.name, MacroStage.name, Stage.name).all()
+    
+    # Processa cada etapa
+    robots_and_systems = []
+    for stage in stages:
+        tasks = stage.tasks
+        start_dates = [t.start_date for t in tasks if t.start_date is not None]
+        end_dates = [t.end_date for t in tasks if t.end_date is not None]
+        
+        etapa_start_date = min(start_dates) if start_dates else None
+        etapa_end_date = max(end_dates) if end_dates else None
+        
+        calculated_status = calculate_stage_status(stage)
+        
+        # Aplica filtro de status (multi-select)
+        if status_filters:
+            if calculated_status not in status_filters:
+                continue
+        
+        robots_and_systems.append({
+            "id": stage.id,
+            "stage_name": stage.name,
+            "stage_type": stage.stage_type,
+            "project_id": stage.macrostage.project.id,
+            "project_name": stage.macrostage.project.name,
+            "macrostage_name": stage.macrostage.name,
+            "scope": stage.scope,
+            "tools": stage.tools,
+            "other_tools": stage.other_tools,
+            "start_date": etapa_start_date,
+            "end_date": etapa_end_date,
+            "status": calculated_status,
+        })
+
+    # Cria Workbook
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Robôs e Sistemas"
+
+    # Cabeçalhos
+    headers = [
+        "Nome do robô/sistema",
+        "Tipo",
+        "Projeto",
+        "Macroetapa",
+        "Escopo",
+        "Ferramentas",
+        "Data de início",
+        "Data de fim",
+        "Status"
+    ]
+    
+    for col, header in enumerate(headers, start=1):
+        ws.cell(row=1, column=col, value=header)
+    
+    format_excel_header(ws, 1, len(headers))
+
+    # Dados
+    for row_idx, item in enumerate(robots_and_systems, start=2):
+        ws.cell(row=row_idx, column=1, value=item['stage_name'])
+        ws.cell(row=row_idx, column=2, value=item['stage_type'])
+        ws.cell(row=row_idx, column=3, value=item['project_name'])
+        ws.cell(row=row_idx, column=4, value=item['macrostage_name'])
+        ws.cell(row=row_idx, column=5, value=item['scope'] or "—")
+        
+        # Ferramentas (combina tools e other_tools)
+        tools_list = []
+        if item['tools']:
+            tools_list.append(item['tools'])
+        if item['other_tools']:
+            tools_list.append(item['other_tools'])
+        ws.cell(row=row_idx, column=6, value=", ".join(tools_list) if tools_list else "—")
+        
+        # Datas
+        format_excel_date(ws.cell(row=row_idx, column=7), item['start_date'])
+        format_excel_date(ws.cell(row=row_idx, column=8), item['end_date'])
+        
+        ws.cell(row=row_idx, column=9, value=item['status'])
+
+    # Ajusta larguras das colunas
+    auto_adjust_column_width(ws)
+
+    # Gera nome do arquivo com timestamp
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"robos_sistemas_{timestamp}"
+
+    return create_excel_response(wb, filename)
 
 
 @app.route("/projects/create", methods=["POST"])
@@ -211,13 +1792,208 @@ def project_detail(project_id: int):
     Permite adicionar Macroetapas, Etapas e Tarefas via formulários simples.
     """
     project = Project.query.get_or_404(project_id)
+    # Calcula o status efetivo (manual ou automático)
+    project_status = get_project_status(project)
+    # Calcula o progresso temporal do projeto
+    # Se o status for manual (Suspenso ou Descartado), não calcular progresso
+    if project_status['is_manual']:
+        progresso_percentual = None
+    else:
+        progresso_percentual = calculate_project_progress(project.start_date, project.end_date)
     # As macroetapas e etapas serão acessadas via relacionamentos no template.
     return render_template(
         "project_detail.html",
         project=project,
         status_choices=PROJECT_STATUS_CHOICES,
         stage_type_choices=STAGE_TYPE_CHOICES,
+        progresso_percentual=progresso_percentual,
+        project_status=project_status,
     )
+
+
+@app.route("/projects/<int:project_id>/export", methods=["GET"])
+def export_project_detail(project_id: int):
+    """
+    Exporta o relatório completo do projeto para Excel (.xlsx).
+    Cria múltiplas planilhas com todas as informações do projeto.
+    """
+    project = Project.query.options(
+        joinedload(Project.macrostages).joinedload(MacroStage.stages).joinedload(Stage.tasks),
+        joinedload(Project.macrostages).joinedload(MacroStage.tasks)
+    ).get_or_404(project_id)
+    
+    # Calcula status e progresso
+    project_status = get_project_status(project)
+    if project_status['is_manual']:
+        progresso_percentual = None
+    else:
+        progresso_percentual = calculate_project_progress(project.start_date, project.end_date)
+    
+    # Cria Workbook
+    wb = Workbook()
+    
+    # Remove planilha padrão
+    if wb.active:
+        wb.remove(wb.active)
+    
+    # ===== Planilha 1: Informações do Projeto =====
+    ws_info = wb.create_sheet("Informações do Projeto")
+    
+    info_data = [
+        ["Campo", "Valor"],
+        ["Nome do projeto", project.name],
+        ["Escopo", project.scope or "—"],
+        ["Status", project_status['display_text'] or "—"],
+        ["Progresso", f"{progresso_percentual}%" if progresso_percentual is not None else "—"],
+        ["Data de início (calculada)", project.start_date.strftime("%d/%m/%Y") if project.start_date else "—"],
+        ["Data de fim (calculada)", project.end_date.strftime("%d/%m/%Y") if project.end_date else "—"],
+        ["Link do GitHub", project.github_link or "—"],
+        ["Coordenador", project.coordinator or "—"],
+        ["Equipe Automatiza / Suporte Automatiza", project.automation_support or "—"],
+        ["Órgão demandante", project.requesting_agency or "—"],
+        ["Setor interno", project.internal_department or "—"],
+        ["Gestor responsável", project.sponsoring_manager or "—"],
+        ["Contato do gestor responsável", project.sponsoring_manager_contact or "—"],
+        ["Gestor técnico", project.technical_manager or "—"],
+        ["Contato do gestor técnico", project.technical_manager_contact or "—"],
+    ]
+    
+    for row_idx, row_data in enumerate(info_data, start=1):
+        for col_idx, value in enumerate(row_data, start=1):
+            cell = ws_info.cell(row=row_idx, column=col_idx, value=value)
+            if row_idx == 1:  # Cabeçalho
+                cell.font = Font(bold=True)
+                cell.fill = PatternFill(start_color="E0E0E0", end_color="E0E0E0", fill_type="solid")
+    
+    auto_adjust_column_width(ws_info)
+    
+    # ===== Planilha 2: Macroetapas =====
+    ws_macros = wb.create_sheet("Macroetapas")
+    
+    headers_macros = ["Nome", "Tipo de estrutura", "Data de início", "Data de fim", "Posição"]
+    for col, header in enumerate(headers_macros, start=1):
+        ws_macros.cell(row=1, column=col, value=header)
+    format_excel_header(ws_macros, 1, len(headers_macros))
+    
+    for row_idx, macro in enumerate(project.macrostages, start=2):
+        ws_macros.cell(row=row_idx, column=1, value=macro.name)
+        ws_macros.cell(row=row_idx, column=2, value=macro.structure_type or "—")
+        format_excel_date(ws_macros.cell(row=row_idx, column=3), macro.start_date)
+        format_excel_date(ws_macros.cell(row=row_idx, column=4), macro.end_date)
+        ws_macros.cell(row=row_idx, column=5, value=macro.position)
+    
+    auto_adjust_column_width(ws_macros)
+    
+    # ===== Planilha 3: Etapas =====
+    ws_stages = wb.create_sheet("Etapas")
+    
+    headers_stages = ["Macroetapa", "Nome", "Tipo", "Escopo", "Ferramentas", "Outras ferramentas", "Data de início", "Data de fim", "Posição"]
+    for col, header in enumerate(headers_stages, start=1):
+        ws_stages.cell(row=1, column=col, value=header)
+    format_excel_header(ws_stages, 1, len(headers_stages))
+    
+    row_idx = 2
+    for macro in project.macrostages:
+        for stage in macro.stages:
+            ws_stages.cell(row=row_idx, column=1, value=macro.name)
+            ws_stages.cell(row=row_idx, column=2, value=stage.name)
+            ws_stages.cell(row=row_idx, column=3, value=stage.stage_type or "—")
+            ws_stages.cell(row=row_idx, column=4, value=stage.scope or "—")
+            ws_stages.cell(row=row_idx, column=5, value=stage.tools or "—")
+            ws_stages.cell(row=row_idx, column=6, value=stage.other_tools or "—")
+            format_excel_date(ws_stages.cell(row=row_idx, column=7), stage.start_date)
+            format_excel_date(ws_stages.cell(row=row_idx, column=8), stage.end_date)
+            ws_stages.cell(row=row_idx, column=9, value=stage.position)
+            row_idx += 1
+    
+    auto_adjust_column_width(ws_stages)
+    
+    # ===== Planilha 4: Tarefas =====
+    ws_tasks = wb.create_sheet("Tarefas")
+    
+    headers_tasks = ["Macroetapa", "Etapa", "Nome", "Data de início", "Data de fim", "Posição"]
+    for col, header in enumerate(headers_tasks, start=1):
+        ws_tasks.cell(row=1, column=col, value=header)
+    format_excel_header(ws_tasks, 1, len(headers_tasks))
+    
+    row_idx = 2
+    for macro in project.macrostages:
+        # Tarefas de etapas
+        for stage in macro.stages:
+            for task in stage.tasks:
+                ws_tasks.cell(row=row_idx, column=1, value=macro.name)
+                ws_tasks.cell(row=row_idx, column=2, value=stage.name)
+                ws_tasks.cell(row=row_idx, column=3, value=task.name)
+                format_excel_date(ws_tasks.cell(row=row_idx, column=4), task.start_date)
+                format_excel_date(ws_tasks.cell(row=row_idx, column=5), task.end_date)
+                ws_tasks.cell(row=row_idx, column=6, value=task.position)
+                row_idx += 1
+        
+        # Tarefas diretas da macroetapa
+        for task in macro.tasks:
+            if task.stage_id is None:  # Apenas tarefas diretas
+                ws_tasks.cell(row=row_idx, column=1, value=macro.name)
+                ws_tasks.cell(row=row_idx, column=2, value="—")  # Sem etapa
+                ws_tasks.cell(row=row_idx, column=3, value=task.name)
+                format_excel_date(ws_tasks.cell(row=row_idx, column=4), task.start_date)
+                format_excel_date(ws_tasks.cell(row=row_idx, column=5), task.end_date)
+                ws_tasks.cell(row=row_idx, column=6, value=task.position)
+                row_idx += 1
+    
+    auto_adjust_column_width(ws_tasks)
+    
+    # ===== Planilha 5: Atualizações Semanais =====
+    # Coleta todas as atualizações semanais do projeto
+    all_updates = []
+    for macro in project.macrostages:
+        # Tarefas diretas da macroetapa
+        for task in macro.tasks:
+            if task.stage_id is None:  # Apenas tarefas diretas
+                for update in task.weekly_updates:
+                    all_updates.append({
+                        'task_name': task.name,
+                        'macro_name': macro.name,
+                        'stage_name': None,
+                        'update_date': update.update_date,
+                        'content': update.content
+                    })
+        # Tarefas de etapas
+        for stage in macro.stages:
+            for task in stage.tasks:
+                for update in task.weekly_updates:
+                    all_updates.append({
+                        'task_name': task.name,
+                        'macro_name': macro.name,
+                        'stage_name': stage.name,
+                        'update_date': update.update_date,
+                        'content': update.content
+                    })
+    
+    if all_updates:
+        ws_updates = wb.create_sheet("Atualizações Semanais")
+        
+        headers_updates = ["Tarefa", "Macroetapa", "Etapa", "Data da atualização", "Conteúdo"]
+        for col, header in enumerate(headers_updates, start=1):
+            ws_updates.cell(row=1, column=col, value=header)
+        format_excel_header(ws_updates, 1, len(headers_updates))
+        
+        for row_idx, update in enumerate(all_updates, start=2):
+            ws_updates.cell(row=row_idx, column=1, value=update['task_name'])
+            ws_updates.cell(row=row_idx, column=2, value=update['macro_name'])
+            ws_updates.cell(row=row_idx, column=3, value=update['stage_name'] or "—")
+            format_excel_date(ws_updates.cell(row=row_idx, column=4), update['update_date'])
+            ws_updates.cell(row=row_idx, column=5, value=update['content'])
+            # Permite quebra de linha no conteúdo
+            ws_updates.cell(row=row_idx, column=5).alignment = Alignment(wrap_text=True)
+        
+        auto_adjust_column_width(ws_updates)
+    
+    # Gera nome do arquivo com timestamp
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    sanitized_name = sanitize_filename(project.name)
+    filename = f"projeto_{sanitized_name}_{timestamp}"
+
+    return create_excel_response(wb, filename)
 
 
 @app.route("/macrostages/create", methods=["POST"])
@@ -244,6 +2020,7 @@ def create_macrostage():
 
     # Recalcula datas do projeto (caso a macroetapa venha a ter datas no futuro)
     recalculate_project(project)
+    recalculate_project_status(project)
     db.session.commit()
 
     return redirect_with_anchor("project_detail", f"macrostage-{macrostage.id}", project_id=project.id)
@@ -305,6 +2082,7 @@ def create_stage():
     # Recalcula datas da macroetapa/projeto (ainda não há tarefas, então provavelmente continuará None)
     recalculate_macrostage(macrostage)
     recalculate_project(macrostage.project)
+    recalculate_project_status(macrostage.project)
     db.session.commit()
 
     return redirect_with_anchor("project_detail", f"stage-{stage.id}", project_id=macrostage.project.id)
@@ -347,6 +2125,19 @@ def create_task():
     start_date = parse_date_field(start_date_str)
     end_date = parse_date_field(end_date_str)
 
+    # Validação das datas
+    is_valid, error_message = validate_task_dates(start_date, end_date)
+    if not is_valid:
+        project_id = macrostage.project.id
+        if stage:
+            anchor = f"stage-{stage.id}"
+        else:
+            anchor = f"macrostage-{macrostage.id}"
+        url = url_for("project_detail", project_id=project_id, error=quote(error_message))
+        if anchor:
+            url = f"{url}#{anchor}"
+        return redirect(url)
+
     if stage:
         if stage.macrostage.structure_type == "tasks":
             return redirect(url_for("project_detail", project_id=stage.macrostage.project.id))
@@ -369,7 +2160,21 @@ def create_task():
         position=next_position,
     )
     db.session.add(task)
-    db.session.commit()
+    
+    # Tenta fazer commit, capturando exceções de validação do modelo
+    try:
+        db.session.commit()
+    except ValueError as e:
+        db.session.rollback()
+        project_id = macrostage.project.id
+        if stage:
+            anchor = f"stage-{stage.id}"
+        else:
+            anchor = f"macrostage-{macrostage.id}"
+        url = url_for("project_detail", project_id=project_id, error=quote(str(e)))
+        if anchor:
+            url = f"{url}#{anchor}"
+        return redirect(url)
 
     # Recalcula datas em cascata (etapa, macroetapa, projeto)
     if stage:
@@ -395,7 +2200,28 @@ def update_project(project_id: int):
 
     project.scope = request.form.get("scope", "").strip() or None
     status = request.form.get("status", "").strip()
-    project.status = status if status in PROJECT_STATUS_CHOICES else None
+    
+    # Tratamento de status manual vs automático
+    if status in ("Suspenso", "Descartado"):
+        # Status manual
+        project.status_manual = True
+        project.status_manual_value = status
+        project.status = status
+    elif status in PROJECT_STATUS_CHOICES:
+        # Outro status válido - volta para automático
+        project.status_manual = False
+        project.status_manual_value = None
+        # Calcula status automático
+        automatic_status = calculate_automatic_status(project)
+        project.status = automatic_status
+    else:
+        # Status vazio ou inválido - volta para automático
+        project.status_manual = False
+        project.status_manual_value = None
+        # Calcula status automático
+        automatic_status = calculate_automatic_status(project)
+        project.status = automatic_status
+    
     project.github_link = request.form.get("github_link", "").strip() or None
     project.coordinator = request.form.get("coordinator", "").strip() or None
     project.automation_support = request.form.get("automation_support", "").strip() or None
@@ -405,9 +2231,32 @@ def update_project(project_id: int):
     project.sponsoring_manager_contact = request.form.get("sponsoring_manager_contact", "").strip() or None
     project.technical_manager = request.form.get("technical_manager", "").strip() or None
     project.technical_manager_contact = request.form.get("technical_manager_contact", "").strip() or None
+    
+    # Processa campo auto_shift_tasks (checkbox)
+    project.auto_shift_tasks = request.form.get("auto_shift_tasks") == "1"
 
     db.session.commit()
 
+    return redirect(url_for("project_detail", project_id=project.id))
+
+
+@app.route("/projects/<int:project_id>/status/auto", methods=["POST"])
+def reactivate_automatic_status(project_id: int):
+    """
+    Reativa o status automático de um projeto, removendo o override manual.
+    """
+    project = Project.query.get_or_404(project_id)
+    
+    # Remove override manual
+    project.status_manual = False
+    project.status_manual_value = None
+    
+    # Calcula e salva status automático
+    automatic_status = calculate_automatic_status(project)
+    project.status = automatic_status
+    
+    db.session.commit()
+    
     return redirect(url_for("project_detail", project_id=project.id))
 
 
@@ -450,6 +2299,7 @@ def delete_macrostage(macrostage_id: int):
     project = Project.query.get(project_id)
     if project:
         recalculate_project(project)
+        recalculate_project_status(project)
         db.session.commit()
 
     return redirect_with_anchor("project_detail", f"macrostage-{macrostage_id}", project_id=project_id)
@@ -512,6 +2362,7 @@ def delete_stage(stage_id: int):
         recalculate_macrostage(macrostage)
     if project:
         recalculate_project(project)
+        recalculate_project_status(project)
     db.session.commit()
 
     return redirect(url_for("project_detail", project_id=project_id))
@@ -690,10 +2541,13 @@ def set_macrostage_structure(macrostage_id: int):
 def update_task(task_id: int):
     """
     Atualiza uma tarefa, incluindo datas de início e fim.
+    Se o projeto tiver auto_shift_tasks ativado e houver deslocamento,
+    redireciona para tela de confirmação antes de aplicar ajustes em cadeia.
     """
     task = Task.query.get_or_404(task_id)
     stage = task.stage
     macrostage = task.macrostage
+    project = macrostage.project
 
     name = request.form.get("name", "").strip()
     start_date_str = request.form.get("start_date", "").strip()
@@ -702,19 +2556,273 @@ def update_task(task_id: int):
     if name:
         task.name = name
 
-    task.start_date = parse_date_field(start_date_str)
-    task.end_date = parse_date_field(end_date_str)
+    # Armazena valores antigos ANTES de atualizar
+    old_start_date = task.start_date
+    old_end_date = task.end_date
 
-    if stage:
-        recalculate_all_from_stage(stage)
-        project_id = stage.macrostage.project.id
-        anchor = f"stage-{stage.id}"
-    else:
-        recalculate_all_from_macrostage(macrostage)
+    # Conversão das strings de data para objetos date
+    new_start_date = parse_date_field(start_date_str)
+    new_end_date = parse_date_field(end_date_str)
+
+    # Validação das datas antes de atualizar
+    is_valid, error_message = validate_task_dates(new_start_date, new_end_date)
+    if not is_valid:
+        project_id = project.id
+        if stage:
+            anchor = f"stage-{stage.id}"
+        else:
+            anchor = f"macrostage-{macrostage.id}"
+        url = url_for("project_detail", project_id=project_id, error=quote(error_message))
+        if anchor:
+            url = f"{url}#{anchor}"
+        return redirect(url)
+
+    # Atualiza os valores na tarefa (ainda não salva no banco)
+    task.start_date = new_start_date
+    task.end_date = new_end_date
+
+    # Verifica se o projeto tem ajuste automático ativado
+    if project.auto_shift_tasks:
+        # Calcula delta de deslocamento
+        delta_days, reference_start_date = calculate_task_shift_delta(
+            old_start_date, old_end_date, new_start_date, new_end_date
+        )
+        
+        # Se houver deslocamento, verifica tarefas subsequentes
+        if delta_days != 0 and reference_start_date is not None:
+            subsequent_tasks = find_subsequent_tasks(
+                project.id, reference_start_date, task.id
+            )
+            
+            # Se houver tarefas subsequentes, redireciona para confirmação
+            if subsequent_tasks:
+                # Salva a alteração da tarefa editada primeiro
+                try:
+                    db.session.commit()
+                except ValueError as e:
+                    db.session.rollback()
+                    project_id = project.id
+                    if stage:
+                        anchor = f"stage-{stage.id}"
+                    else:
+                        anchor = f"macrostage-{macrostage.id}"
+                    url = url_for("project_detail", project_id=project_id, error=quote(str(e)))
+                    if anchor:
+                        url = f"{url}#{anchor}"
+                    return redirect(url)
+                
+                # Redireciona para tela de confirmação
+                return redirect(url_for(
+                    "confirm_task_shift",
+                    task_id=task.id,
+                    delta_days=delta_days,
+                    old_start_date=reference_start_date.isoformat()
+                ))
+
+    # Se não houver ajuste em cadeia, salva normalmente e recalcula datas agregadas
+    try:
+        if stage:
+            recalculate_all_from_stage(stage)
+            project_id = stage.macrostage.project.id
+            anchor = f"stage-{stage.id}"
+        else:
+            recalculate_all_from_macrostage(macrostage)
+            project_id = macrostage.project.id
+            anchor = f"macrostage-{macrostage.id}"
+    except ValueError as e:
+        db.session.rollback()
         project_id = macrostage.project.id
-        anchor = f"macrostage-{macrostage.id}"
+        if stage:
+            anchor = f"stage-{stage.id}"
+        else:
+            anchor = f"macrostage-{macrostage.id}"
+        url = url_for("project_detail", project_id=project_id, error=quote(str(e)))
+        if anchor:
+            url = f"{url}#{anchor}"
+        return redirect(url)
 
     return redirect_with_anchor("project_detail", anchor, project_id=project_id)
+
+
+@app.route("/tasks/<int:task_id>/confirm_shift", methods=["GET"])
+def confirm_task_shift(task_id: int):
+    """
+    Exibe tela de confirmação para ajuste automático de tarefas em cadeia.
+    Recebe delta_days e old_start_date via query string.
+    """
+    task = Task.query.get_or_404(task_id)
+    project = task.macrostage.project
+    
+    # Valida que o projeto tem auto_shift_tasks ativado
+    if not project.auto_shift_tasks:
+        return redirect(url_for("project_detail", project_id=project.id))
+    
+    # Recebe parâmetros da query string
+    delta_days_str = request.args.get("delta_days", "").strip()
+    old_start_date_str = request.args.get("old_start_date", "").strip()
+    
+    try:
+        delta_days = int(delta_days_str)
+        old_start_date = datetime.strptime(old_start_date_str, "%Y-%m-%d").date() if old_start_date_str else None
+    except (ValueError, TypeError):
+        return redirect(url_for("project_detail", project_id=project.id))
+    
+    if delta_days == 0 or old_start_date is None:
+        return redirect(url_for("project_detail", project_id=project.id))
+    
+    # Recalcula lista de tarefas subsequentes (garantindo consistência)
+    subsequent_tasks = find_subsequent_tasks(project.id, old_start_date, task.id)
+    
+    # Prepara dados das tarefas impactadas
+    affected_tasks = []
+    for subsequent_task in subsequent_tasks:
+        old_start = subsequent_task.start_date
+        old_end = subsequent_task.end_date
+        
+        # Calcula novas datas
+        new_start = (old_start + timedelta(days=delta_days)) if old_start else None
+        new_end = (old_end + timedelta(days=delta_days)) if old_end else None
+        
+        # Obtém nome da macroetapa e etapa
+        macrostage_name = subsequent_task.macrostage.name
+        stage_name = subsequent_task.stage.name if subsequent_task.stage else None
+        
+        affected_tasks.append({
+            'task': subsequent_task,
+            'macrostage_name': macrostage_name,
+            'stage_name': stage_name,
+            'old_start_date': old_start,
+            'old_end_date': old_end,
+            'new_start_date': new_start,
+            'new_end_date': new_end,
+        })
+    
+    return render_template(
+        "confirm_task_shift.html",
+        task=task,
+        project=project,
+        delta_days=delta_days,
+        old_start_date=old_start_date,
+        affected_tasks=affected_tasks,
+    )
+
+
+@app.route("/tasks/<int:task_id>/apply_shift", methods=["POST"])
+def apply_task_shift(task_id: int):
+    """
+    Aplica ajustes em cadeia nas tarefas subsequentes após confirmação do usuário.
+    """
+    task = Task.query.get_or_404(task_id)
+    project = task.macrostage.project
+    
+    # Valida que o projeto tem auto_shift_tasks ativado
+    if not project.auto_shift_tasks:
+        flash("Ajuste automático não está ativado para este projeto.", "error")
+        return redirect(url_for("project_detail", project_id=project.id))
+    
+    # Recebe parâmetros do formulário
+    delta_days_str = request.form.get("delta_days", "").strip()
+    old_start_date_str = request.form.get("old_start_date", "").strip()
+    
+    try:
+        delta_days = int(delta_days_str)
+        old_start_date = datetime.strptime(old_start_date_str, "%Y-%m-%d").date() if old_start_date_str else None
+    except (ValueError, TypeError):
+        flash("Parâmetros inválidos.", "error")
+        return redirect(url_for("project_detail", project_id=project.id))
+    
+    if delta_days == 0 or old_start_date is None:
+        flash("Nenhum ajuste a ser aplicado.", "error")
+        return redirect(url_for("project_detail", project_id=project.id))
+    
+    # Recalcula lista de tarefas subsequentes (garantindo consistência)
+    subsequent_tasks = find_subsequent_tasks(project.id, old_start_date, task.id)
+    
+    if not subsequent_tasks:
+        flash("Nenhuma tarefa subsequente foi encontrada.", "info")
+        return redirect(url_for("project_detail", project_id=project.id))
+    
+    # Aplica ajustes em transação
+    try:
+        # A tarefa editada já foi salva na rota update_task
+        # Agora aplicamos ajustes nas tarefas subsequentes
+        # IMPORTANTE: Atualizamos end_date primeiro sempre para evitar conflito
+        # com o validador do modelo que verifica start_date <= end_date
+        # Quando postergando (delta_days > 0), end_date aumenta primeiro, então start_date pode aumentar depois
+        # Quando antecipando (delta_days < 0), end_date diminui primeiro, então start_date pode diminuir depois
+        for subsequent_task in subsequent_tasks:
+            # Calcula as novas datas primeiro
+            new_start_date = None
+            new_end_date = None
+            
+            if subsequent_task.start_date:
+                new_start_date = subsequent_task.start_date + timedelta(days=delta_days)
+            if subsequent_task.end_date:
+                new_end_date = subsequent_task.end_date + timedelta(days=delta_days)
+            
+            # Valida que as novas datas são válidas (start_date <= end_date)
+            if new_start_date is not None and new_end_date is not None:
+                if new_start_date > new_end_date:
+                    raise ValueError(
+                        f"Erro ao deslocar tarefa '{subsequent_task.name}': "
+                        f"a nova data de início ({new_start_date.strftime('%d/%m/%Y')}) "
+                        f"seria maior que a nova data de fim ({new_end_date.strftime('%d/%m/%Y')})."
+                    )
+            
+            # Atualiza na ordem correta dependendo se está postergando ou antecipando
+            # para evitar conflito com o validador do modelo que verifica start_date <= end_date
+            if delta_days > 0:
+                # POSTERGANDO: atualiza end_date primeiro (aumenta)
+                # Quando start_date for atualizado depois, end_date já estará maior
+                if new_end_date is not None:
+                    subsequent_task.end_date = new_end_date
+                if new_start_date is not None:
+                    subsequent_task.start_date = new_start_date
+            else:
+                # ANTECIPANDO: atualiza start_date primeiro (diminui)
+                # Quando end_date for atualizado depois, start_date já estará menor
+                if new_start_date is not None:
+                    subsequent_task.start_date = new_start_date
+                if new_end_date is not None:
+                    subsequent_task.end_date = new_end_date
+        
+        # Recalcula datas agregadas para todas as etapas/macroetapas afetadas
+        # Coleta todas as etapas e macroetapas únicas das tarefas afetadas
+        affected_stages = set()
+        affected_macrostages = set()
+        
+        for subsequent_task in subsequent_tasks:
+            if subsequent_task.stage:
+                affected_stages.add(subsequent_task.stage)
+            affected_macrostages.add(subsequent_task.macrostage)
+        
+        # Recalcula etapas afetadas
+        for stage in affected_stages:
+            recalculate_stage(stage)
+        
+        # Recalcula macroetapas afetadas
+        for macrostage in affected_macrostages:
+            recalculate_macrostage(macrostage)
+        
+        # Recalcula projeto
+        recalculate_project(project)
+        recalculate_project_status(project)
+        
+        # Commit de todas as alterações
+        db.session.commit()
+        
+        # Mensagem de sucesso
+        if delta_days > 0:
+            flash(f"Cronograma atualizado. {len(subsequent_tasks)} tarefa{'s' if len(subsequent_tasks) != 1 else ''} foram postergada{'s' if len(subsequent_tasks) != 1 else ''} em {delta_days} dia{'s' if delta_days != 1 else ''}.", "success")
+        else:
+            flash(f"Cronograma atualizado. {len(subsequent_tasks)} tarefa{'s' if len(subsequent_tasks) != 1 else ''} foram antecipada{'s' if len(subsequent_tasks) != 1 else ''} em {-delta_days} dia{'s' if -delta_days != 1 else ''}.", "success")
+        
+    except Exception as e:
+        db.session.rollback()
+        flash(f"Erro ao aplicar ajustes: {str(e)}", "error")
+        return redirect(url_for("project_detail", project_id=project.id))
+    
+    return redirect(url_for("project_detail", project_id=project.id))
 
 
 @app.route("/tasks/<int:task_id>/delete", methods=["POST"])

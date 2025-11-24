@@ -1,0 +1,101 @@
+{% extends "base.html" %}
+
+{% block title %}Confirmar Ajuste de Cronograma{% endblock %}
+
+{% block breadcrumbs %}
+    &raquo; <a href="{{ url_for('project_detail', project_id=project.id) }}">Projeto {{ project.name }}</a>
+    &raquo; Confirmar ajuste de cronograma
+{% endblock %}
+
+{% block content %}
+<div class="card">
+    <h2>Confirmar Ajuste de Cronograma</h2>
+    
+    {% if delta_days > 0 %}
+        <p>
+            Você postergou a tarefa <strong>"{{ task.name }}"</strong> em <strong>{{ delta_days }} dia{{ 's' if delta_days != 1 else '' }}</strong>.
+        </p>
+        <p>
+            As tarefas subsequentes abaixo terão suas datas de início e fim postergadas em <strong>{{ delta_days }} dia{{ 's' if delta_days != 1 else '' }}</strong>.
+        </p>
+    {% else %}
+        <p>
+            Você antecipou a tarefa <strong>"{{ task.name }}"</strong> em <strong>{{ -delta_days }} dia{{ 's' if -delta_days != 1 else '' }}</strong>.
+        </p>
+        <p>
+            As tarefas subsequentes abaixo terão suas datas de início e fim antecipadas em <strong>{{ -delta_days }} dia{{ 's' if -delta_days != 1 else '' }}</strong>.
+        </p>
+    {% endif %}
+    
+    {% if affected_tasks %}
+        <h3>Tarefas que serão impactadas:</h3>
+        <table>
+            <thead>
+                <tr>
+                    <th>Tarefa</th>
+                    <th>Macroetapa</th>
+                    <th>Etapa</th>
+                    <th>Data de início atual</th>
+                    <th>Data de fim atual</th>
+                    <th>Nova data de início</th>
+                    <th>Nova data de fim</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for affected_task in affected_tasks %}
+                    <tr>
+                        <td>{{ affected_task.task.name }}</td>
+                        <td>{{ affected_task.macrostage_name }}</td>
+                        <td>{{ affected_task.stage_name or "—" }}</td>
+                        <td>
+                            {% if affected_task.old_start_date %}
+                                {{ affected_task.old_start_date.strftime("%d/%m/%Y") }}
+                            {% else %}
+                                —
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if affected_task.old_end_date %}
+                                {{ affected_task.old_end_date.strftime("%d/%m/%Y") }}
+                            {% else %}
+                                —
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if affected_task.new_start_date %}
+                                {{ affected_task.new_start_date.strftime("%d/%m/%Y") }}
+                            {% else %}
+                                —
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if affected_task.new_end_date %}
+                                {{ affected_task.new_end_date.strftime("%d/%m/%Y") }}
+                            {% else %}
+                                —
+                            {% endif %}
+                        </td>
+                    </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        
+        <form action="{{ url_for('apply_task_shift', task_id=task.id) }}" method="post" style="margin-top: 20px;">
+            <input type="hidden" name="delta_days" value="{{ delta_days }}">
+            <input type="hidden" name="old_start_date" value="{{ old_start_date.isoformat() }}">
+            <button type="submit" style="padding: 10px 20px; background-color: #4caf50; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 16px;">
+                Confirmar ajuste no cronograma
+            </button>
+            <a href="{{ url_for('project_detail', project_id=project.id) }}" style="margin-left: 12px; padding: 10px 20px; background-color: #f5f5f5; border: 1px solid #bbb; border-radius: 4px; text-decoration: none; color: #333; display: inline-block;">
+                Cancelar
+            </a>
+        </form>
+    {% else %}
+        <p>Nenhuma tarefa subsequente será impactada.</p>
+        <a href="{{ url_for('project_detail', project_id=project.id) }}" style="margin-top: 12px; padding: 10px 20px; background-color: #f5f5f5; border: 1px solid #bbb; border-radius: 4px; text-decoration: none; color: #333; display: inline-block;">
+            Voltar ao projeto
+        </a>
+    {% endif %}
+</div>
+{% endblock %}
+

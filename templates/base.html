@@ -3,10 +3,18 @@
 <head>
     <meta charset="UTF-8">
     <title>{% block title %}Cronograma de Projetos{% endblock %}</title>
+    <!-- Choices.js CSS -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/choices.js/public/assets/styles/choices.min.css">
     <style>
         body {
             font-family: Arial, sans-serif;
             margin: 24px;
+            position: relative;
+            z-index: 0;
+        }
+        html {
+            position: relative;
+            z-index: 0;
         }
         header {
             margin-bottom: 24px;
@@ -20,6 +28,7 @@
             padding: 16px;
             border-radius: 8px;
             margin-bottom: 16px;
+            overflow: visible;
         }
         .card h2, .card h3, .card h4 {
             margin-top: 0;
@@ -87,6 +96,26 @@
         }
         .link-button:hover {
             background-color: #f0f0f0;
+        }
+        .flash-message {
+            padding: 12px 16px;
+            border-radius: 4px;
+            margin-bottom: 8px;
+        }
+        .flash-success {
+            background-color: #d4edda;
+            border: 1px solid #c3e6cb;
+            color: #155724;
+        }
+        .flash-error {
+            background-color: #f8d7da;
+            border: 1px solid #f5c6cb;
+            color: #721c24;
+        }
+        .flash-info {
+            background-color: #d1ecf1;
+            border: 1px solid #bee5eb;
+            color: #0c5460;
         }
         .breadcrumbs {
             margin-bottom: 16px;
@@ -165,12 +194,19 @@
         .project-form-fields {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-            gap: 12px;
+            gap: 20px;
             margin-top: 12px;
+            position: relative;
+            overflow: visible;
+            /* Não cria novo stacking context */
+            z-index: 0;
         }
         .project-form-fields .field {
             display: flex;
             flex-direction: column;
+            position: relative;
+            overflow: visible;
+            min-height: 60px;
         }
         .project-form-fields label {
             font-size: 0.85rem;
@@ -258,6 +294,277 @@
         button.danger:hover {
             background-color: #ffd4d4;
         }
+        .progress-bar-container {
+            width: 100px;
+            height: 20px;
+            background-color: #e0e0e0;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            overflow: hidden;
+            display: inline-block;
+            vertical-align: middle;
+            position: relative;
+        }
+        .progress-bar-fill {
+            height: 100%;
+            background-color: #4caf50;
+            transition: width 0.3s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-size: 0.7rem;
+            font-weight: bold;
+            min-width: fit-content;
+            padding: 0 2px;
+            box-sizing: border-box;
+            max-width: 100%;
+        }
+        /* Estilos customizados para Choices.js */
+        .project-form-fields .field .choices {
+            margin-bottom: 0;
+            position: relative;
+        }
+        .choices {
+            margin-bottom: 0;
+            position: relative;
+        }
+        /* Quando o dropdown está aberto, garante z-index muito alto */
+        .choices.is-open {
+            z-index: 999999 !important;
+            position: relative !important;
+        }
+        .choices__inner {
+            min-height: 38px;
+            padding: 4px 8px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            background-color: #fff;
+            font-size: 0.9rem;
+        }
+        /* Dropdown sempre com z-index muito alto e posicionamento correto */
+        .choices__list--dropdown {
+            position: absolute !important;
+            z-index: 999999 !important;
+            background-color: #fff !important;
+            border: 1px solid #ccc;
+            border-top: none;
+            border-radius: 0 0 4px 4px;
+            max-height: 180px;
+            overflow-y: auto;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+            margin-top: -1px;
+            visibility: visible !important;
+            opacity: 1 !important;
+            display: block !important;
+            top: 100% !important;
+            left: 0 !important;
+            right: 0 !important;
+            bottom: auto !important;
+        }
+        /* Garante que o dropdown aberto fique acima de tudo */
+        .choices.is-open .choices__list--dropdown {
+            z-index: 999999 !important;
+            position: absolute !important;
+        }
+        /* Remove qualquer transform ou filter que possa criar novo stacking context */
+        .choices__list--dropdown,
+        .choices.is-open,
+        .project-form-fields .field .choices.is-open {
+            transform: none !important;
+            filter: none !important;
+            will-change: auto !important;
+        }
+        /* Garante que nenhum container pai interfira com o z-index do dropdown */
+        .card .choices.is-open,
+        .project-form-fields .choices.is-open,
+        .project-form-fields .field .choices.is-open {
+            z-index: 999999 !important;
+        }
+        /* Força o dropdown a aparecer acima de qualquer elemento */
+        .choices__list--dropdown,
+        .choices.is-open .choices__list--dropdown {
+            z-index: 999999 !important;
+            position: absolute !important;
+        }
+        /* Melhora visual quando dropdown está aberto */
+        .project-form-fields .field .choices.is-open .choices__inner {
+            border-color: #0066cc;
+        }
+        .choices__list--multiple .choices__item {
+            background-color: #0066cc;
+            border: 1px solid #005999;
+            color: #fff;
+            padding: 2px 8px;
+            margin: 2px;
+            border-radius: 4px;
+            font-size: 0.85rem;
+        }
+        .choices__list--multiple .choices__item.is-highlighted {
+            background-color: #005999;
+        }
+        .choices__button {
+            border-left: 1px solid #005999;
+            padding-left: 8px;
+            margin-left: 4px;
+        }
+        .choices__input {
+            background-color: transparent;
+            font-size: 0.9rem;
+        }
+        .choices__input--cloned {
+            padding: 4px 8px;
+        }
+        .choices__placeholder {
+            opacity: 0.5;
+        }
+        /* Modal de erro */
+        .error-modal {
+            display: none;
+            position: fixed;
+            z-index: 1000000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.5);
+            animation: fadeIn 0.3s;
+        }
+        .error-modal.show {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .error-modal-content {
+            background-color: #fff;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+            max-width: 500px;
+            width: 90%;
+            text-align: center;
+            animation: slideDown 0.3s;
+            border: 2px solid #dd6666;
+        }
+        .error-modal-icon {
+            font-size: 48px;
+            color: #a30000;
+            margin-bottom: 16px;
+        }
+        .error-modal-title {
+            font-size: 20px;
+            font-weight: bold;
+            color: #a30000;
+            margin-bottom: 12px;
+        }
+        .error-modal-message {
+            font-size: 16px;
+            color: #333;
+            margin-bottom: 24px;
+            line-height: 1.5;
+        }
+        .error-modal-button {
+            background-color: #a30000;
+            color: white;
+            border: none;
+            padding: 12px 32px;
+            border-radius: 4px;
+            font-size: 16px;
+            cursor: pointer;
+            transition: background-color 0.2s;
+        }
+        .error-modal-button:hover {
+            background-color: #cc0000;
+        }
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+        @keyframes slideDown {
+            from {
+                transform: translateY(-50px);
+                opacity: 0;
+            }
+            to {
+                transform: translateY(0);
+                opacity: 1;
+            }
+        }
+        /* Toggle Switch Styles */
+        .auto-shift-toggle-container {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .toggle-label {
+            font-size: 0.9rem;
+            color: #555;
+            white-space: nowrap;
+        }
+        .toggle-switch {
+            position: relative;
+            display: inline-block;
+            width: 26px;
+            height: 12px;
+        }
+        .toggle-switch input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+        .toggle-slider {
+            position: absolute;
+            cursor: pointer;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: #ccc;
+            transition: 0.3s;
+            border-radius: 12px;
+        }
+        .toggle-slider:before {
+            position: absolute;
+            content: "";
+            height: 9px;
+            width: 9px;
+            left: 1.5px;
+            bottom: 1.5px;
+            background-color: white;
+            transition: 0.3s;
+            border-radius: 50%;
+        }
+        .toggle-switch input:checked + .toggle-slider {
+            background-color: #4caf50;
+        }
+        .toggle-switch input:checked + .toggle-slider:before {
+            transform: translateX(14px);
+        }
+        .toggle-switch input:focus + .toggle-slider {
+            box-shadow: 0 0 1px #4caf50;
+        }
+        .toggle-switch input:disabled + .toggle-slider {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+        .toggle-help-icon {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 16px;
+            height: 16px;
+            border-radius: 50%;
+            background-color: #0066cc;
+            color: white;
+            font-size: 11px;
+            font-weight: bold;
+            cursor: help;
+            line-height: 1;
+            vertical-align: middle;
+        }
+        .toggle-help-icon:hover {
+            background-color: #005999;
+        }
     </style>
 </head>
 <body>
@@ -266,13 +573,89 @@
         <h1>Cronograma de Projetos (PoC)</h1>
         <nav class="breadcrumbs">
             <a href="{{ url_for('list_projects') }}">Projetos</a>
+            <span> | </span>
+            <a href="{{ url_for('dashboard_projects') }}">Dashboard de Projetos</a>
+            <span> | </span>
+            <a href="{{ url_for('dashboard_timeline') }}">Dashboard de Cronograma</a>
+            <span> | </span>
+            <a href="{{ url_for('dashboard_robots_systems') }}">Robôs e Sistemas</a>
             {% block breadcrumbs %}{% endblock %}
         </nav>
         <hr>
     </header>
 
+    {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+            <div style="margin-bottom: 16px;">
+                {% for category, message in messages %}
+                    <div class="flash-message flash-{{ category }}" style="padding: 12px 16px; border-radius: 4px; margin-bottom: 8px; border: 1px solid;">
+                        {{ message }}
+                    </div>
+                {% endfor %}
+            </div>
+        {% endif %}
+    {% endwith %}
+
     {% block content %}{% endblock %}
 </div>
+
+<!-- Modal de erro -->
+<div id="errorModal" class="error-modal">
+    <div class="error-modal-content">
+        <div class="error-modal-icon">⚠️</div>
+        <div class="error-modal-title">Erro de Validação</div>
+        <div class="error-modal-message" id="errorModalMessage"></div>
+        <button class="error-modal-button" onclick="closeErrorModal()">OK</button>
+    </div>
+</div>
+
+<script>
+// Função para exibir modal de erro
+function showErrorModal(message) {
+    const modal = document.getElementById('errorModal');
+    const messageElement = document.getElementById('errorModalMessage');
+    if (modal && messageElement) {
+        messageElement.textContent = message;
+        modal.classList.add('show');
+        // Fecha ao clicar fora do modal
+        modal.addEventListener('click', function(e) {
+            if (e.target === modal) {
+                closeErrorModal();
+            }
+        });
+        // Fecha ao pressionar ESC
+        document.addEventListener('keydown', function(e) {
+            if (e.key === 'Escape' && modal.classList.contains('show')) {
+                closeErrorModal();
+            }
+        });
+    }
+}
+
+// Função para fechar modal de erro
+function closeErrorModal() {
+    const modal = document.getElementById('errorModal');
+    if (modal) {
+        modal.classList.remove('show');
+        // Remove o parâmetro error da URL sem recarregar a página
+        const url = new URL(window.location);
+        url.searchParams.delete('error');
+        window.history.replaceState({}, '', url);
+    }
+}
+
+// Verifica se há mensagem de erro na URL ao carregar a página
+document.addEventListener('DOMContentLoaded', function() {
+    const urlParams = new URLSearchParams(window.location.search);
+    const errorMessage = urlParams.get('error');
+    if (errorMessage) {
+        // Decodifica a mensagem (pode estar URL-encoded)
+        const decodedMessage = decodeURIComponent(errorMessage);
+        showErrorModal(decodedMessage);
+    }
+});
+</script>
+
 <script>
 document.addEventListener("DOMContentLoaded", function () {
     function focusFirstInput(target) {
@@ -327,6 +710,171 @@ document.addEventListener("DOMContentLoaded", function () {
             radio.addEventListener("change", updateExtraFields);
         });
     });
+});
+</script>
+<!-- Choices.js JavaScript -->
+<script src="https://cdn.jsdelivr.net/npm/choices.js/public/assets/scripts/choices.min.js"></script>
+<script>
+// Inicialização dos multi-selects com Choices.js
+document.addEventListener("DOMContentLoaded", function () {
+    // Função para inicializar um select como multi-select
+    function initMultiSelect(selectElement) {
+        if (!selectElement || selectElement.hasAttribute('data-choices-initialized')) {
+            return;
+        }
+        
+        const choices = new Choices(selectElement, {
+            removeItemButton: true,
+            searchEnabled: true,
+            searchChoices: true,
+            placeholder: true,
+            placeholderValue: 'Selecione...',
+            searchPlaceholderValue: 'Buscar...',
+            itemSelectText: '',
+            shouldSort: true,
+            shouldSortItems: false,
+            position: 'auto',
+            flip: true,
+            flipOnActivation: true,
+            classNames: {
+                containerOuter: 'choices',
+                containerInner: 'choices__inner',
+                input: 'choices__input',
+                inputCloned: 'choices__input--cloned',
+                list: 'choices__list',
+                listItems: 'choices__list--multiple',
+                listSingle: 'choices__list--single',
+                listDropdown: 'choices__list--dropdown',
+                item: 'choices__item',
+                itemSelectable: 'choices__item--selectable',
+                itemDisabled: 'choices__item--disabled',
+                itemChoice: 'choices__item--choice',
+                placeholder: 'choices__placeholder',
+                group: 'choices__group',
+                groupHeading: 'choices__heading',
+                button: 'choices__button',
+                activeState: 'is-active',
+                focusState: 'is-focused',
+                openState: 'is-open',
+                disabledState: 'is-disabled',
+                highlightedState: 'is-highlighted',
+                selectedState: 'is-selected',
+                flippedState: 'is-flipped',
+                loadingState: 'is-loading',
+                noResults: 'has-no-results',
+                noChoices: 'has-no-choices'
+            }
+        });
+        
+        // Armazena a instância do Choices no elemento select para acesso posterior
+        selectElement.choicesInstance = choices;
+        
+        // Ajusta z-index quando o dropdown abre/fecha usando MutationObserver simples
+        const containerOuter = choices.containerOuter.element;
+        let isOpen = false;
+        
+        const observer = new MutationObserver(function(mutations) {
+            const wasOpen = isOpen;
+            isOpen = containerOuter.classList.contains('is-open');
+            
+            // Só processa se o estado mudou
+            if (wasOpen !== isOpen) {
+                if (isOpen) {
+                    // Força z-index muito alto no container
+                    containerOuter.style.zIndex = '999999';
+                    containerOuter.style.position = 'relative';
+                    
+                    // Aguarda um pouco para garantir que o dropdown foi renderizado
+                    setTimeout(function() {
+                        const dropdown = containerOuter.querySelector('.choices__list--dropdown');
+                        if (dropdown) {
+                            // Força z-index muito alto no dropdown
+                            dropdown.style.zIndex = '999999';
+                            dropdown.style.position = 'absolute';
+                            dropdown.style.top = '100%';
+                            dropdown.style.left = '0';
+                            dropdown.style.right = '0';
+                            dropdown.style.bottom = 'auto';
+                            // Garante que está visível
+                            dropdown.style.visibility = 'visible';
+                            dropdown.style.opacity = '1';
+                            dropdown.style.display = 'block';
+                            // Remove qualquer transform que possa criar novo stacking context
+                            dropdown.style.transform = 'none';
+                            dropdown.style.filter = 'none';
+                            
+                            // Também remove transform do container
+                            containerOuter.style.transform = 'none';
+                            containerOuter.style.filter = 'none';
+                        }
+                    }, 0);
+                } else {
+                    // Remove estilos quando fecha
+                    containerOuter.style.zIndex = '';
+                    containerOuter.style.transform = '';
+                    containerOuter.style.filter = '';
+                    const dropdown = containerOuter.querySelector('.choices__list--dropdown');
+                    if (dropdown) {
+                        dropdown.style.zIndex = '';
+                        dropdown.style.transform = '';
+                        dropdown.style.filter = '';
+                    }
+                }
+            }
+        });
+        
+        observer.observe(containerOuter, { 
+            attributes: true, 
+            attributeFilter: ['class'] 
+        });
+        
+        // Marca como inicializado
+        selectElement.setAttribute('data-choices-initialized', 'true');
+        
+        return choices;
+    }
+    
+    // Inicializa todos os selects com atributo multiple
+    document.querySelectorAll('select[multiple]').forEach(function(select) {
+        initMultiSelect(select);
+    });
+    
+    // Inicializa selects que devem ser multi-select (identificados por classe ou data-attribute)
+    document.querySelectorAll('select[data-multiselect="true"]').forEach(function(select) {
+        initMultiSelect(select);
+    });
+    
+    // Listeners globais únicos para fechar dropdowns
+    let scrollHandler = null;
+    let clickHandler = null;
+    
+    // Fecha dropdowns ao rolar a página (apenas um listener)
+    if (!window.choicesScrollHandler) {
+        window.choicesScrollHandler = function() {
+            document.querySelectorAll('.choices.is-open').forEach(function(container) {
+                const select = container.closest('.field')?.querySelector('select');
+                if (select && select.choicesInstance) {
+                    select.choicesInstance.hideDropdown();
+                }
+            });
+        };
+        window.addEventListener('scroll', window.choicesScrollHandler, true);
+    }
+    
+    // Fecha dropdowns ao clicar fora (apenas um listener)
+    if (!window.choicesClickHandler) {
+        window.choicesClickHandler = function(event) {
+            document.querySelectorAll('.choices.is-open').forEach(function(container) {
+                if (!container.contains(event.target)) {
+                    const select = container.closest('.field')?.querySelector('select');
+                    if (select && select.choicesInstance) {
+                        select.choicesInstance.hideDropdown();
+                    }
+                }
+            });
+        };
+        document.addEventListener('click', window.choicesClickHandler);
+    }
 });
 </script>
 {% block extra_scripts %}{% endblock %}

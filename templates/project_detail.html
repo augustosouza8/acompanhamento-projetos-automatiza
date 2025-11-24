@@ -26,14 +26,25 @@
     "sistema": "Sistema",
     "não se aplica": "Não se aplica"
 } %}
-<div class="card">
-    <h2>
+<div class="card" style="position: relative;">
+    <h2 style="position: relative; z-index: 1;">
         Projeto:
         <span class="inline-display">
             {{ project.name }}
             <button type="button" class="icon-button" data-toggle-target="project-edit-{{ project.id }}" aria-label="Editar projeto">&#9998;</button>
         </span>
+        <a href="{{ url_for('export_project_detail', project_id=project.id) }}" class="link-button" style="margin-left: 16px;">
+            📥 Exportar relatório do projeto
+        </a>
     </h2>
+    <div class="auto-shift-toggle-container" style="position: absolute; top: 60px; right: 16px; display: inline-flex; align-items: center; gap: 6px; z-index: 10;">
+        <span style="font-size: 0.9rem; color: #555; white-space: nowrap;">Ajuste automático de tarefas: </span>
+        <label class="toggle-switch">
+            <input type="checkbox" id="auto-shift-toggle-{{ project.id }}" {% if project.auto_shift_tasks %}checked{% endif %}>
+            <span class="toggle-slider"></span>
+        </label>
+        <span class="toggle-help-icon" title="Quando ativado, ao alterar a data de uma tarefa, o sistema irá automaticamente alterar as datas das tarefas subsequentes em cadeia.">?</span>
+    </div>
     <p class="small-text">
         <strong>Início (calculado):</strong>
         {% if project.start_date %}
@@ -48,10 +59,17 @@
         {% else %}
             —
         {% endif %}
+        &nbsp;&nbsp;
+        <strong>Progresso:</strong>
+        {% if progresso_percentual is not none %}
+            {{ progresso_percentual }}%
+        {% else %}
+            —
+        {% endif %}
     </p>
     <div class="project-meta">
         <p><strong>Escopo do Projeto:</strong> {{ project.scope or "—" }}</p>
-        <p><strong>Status:</strong> {{ project.status or "—" }}</p>
+        <p><strong>Status:</strong> {{ project_status.display_text or "—" }}</p>
         <p>
             <strong>GitHub:</strong>
             {% if project.github_link %}
@@ -70,7 +88,7 @@
         <p><strong>Contato gestor técnico:</strong> {{ project.technical_manager_contact or "—" }}</p>
     </div>
     <div class="edit-form" id="project-edit-{{ project.id }}">
-        <form class="project-edit-form" action="{{ url_for('update_project', project_id=project.id) }}" method="post">
+        <form class="project-edit-form" action="{{ url_for('update_project', project_id=project.id) }}" method="post" id="project-form-{{ project.id }}">
             <div class="project-form-fields">
                 <div class="field">
                     <label for="project-name-{{ project.id }}">Nome do projeto</label>
@@ -83,12 +101,9 @@
                 <div class="field">
                     <label for="project-status-{{ project.id }}">Status</label>
                     <select id="project-status-{{ project.id }}" name="status">
-                        <option value="">Selecione...</option>
-                        {% for status_option in status_choices %}
-                            <option value="{{ status_option }}" {% if project.status == status_option %}selected{% endif %}>
-                                {{ status_option }}
-                            </option>
-                        {% endfor %}
+                        <option value="" {% if not project.status_manual %}selected{% endif %}>Automático (o sistema calculará o status - "A iniciar", "Em andamento", "Concluído" - de acordo as datas cadastradas para as tarefas)</option>
+                        <option value="Suspenso" {% if project.status_manual and project.status_manual_value == "Suspenso" %}selected{% endif %}>Suspenso (definido manualmente)</option>
+                        <option value="Descartado" {% if project.status_manual and project.status_manual_value == "Descartado" %}selected{% endif %}>Descartado (definido manualmente)</option>
                     </select>
                 </div>
                 <div class="field">
@@ -594,7 +609,54 @@ document.addEventListener("DOMContentLoaded", function () {
     initMacrostageDrag();
     initStageDrag();
     initTaskDrag();
+    initAutoShiftToggle();
 });
+
+function initAutoShiftToggle() {
+    const toggle = document.getElementById('auto-shift-toggle-{{ project.id }}');
+    const form = document.getElementById('project-form-{{ project.id }}');
+    
+    if (!toggle) {
+        return;
+    }
+    
+    toggle.addEventListener('change', function() {
+        // Cria um formulário temporário para submeter apenas o campo auto_shift_tasks
+        const tempForm = document.createElement('form');
+        tempForm.method = 'POST';
+        tempForm.action = form ? form.action : '{{ url_for("update_project", project_id=project.id) }}';
+        
+        // Adiciona o campo auto_shift_tasks
+        const autoShiftInput = document.createElement('input');
+        autoShiftInput.type = 'hidden';
+        autoShiftInput.name = 'auto_shift_tasks';
+        autoShiftInput.value = this.checked ? '1' : '0';
+        tempForm.appendChild(autoShiftInput);
+        
+        // Se o formulário estiver visível, adiciona todos os outros campos para manter os valores
+        if (form) {
+            const originalInputs = form.querySelectorAll('input, select, textarea');
+            originalInputs.forEach(function(input) {
+                if (input.name && input.name !== 'auto_shift_tasks' && input.type !== 'submit' && input.type !== 'button' && !input.id.includes('auto-shift')) {
+                    const clone = input.cloneNode(true);
+                    clone.removeAttribute('id');
+                    // Para selects, preserva o valor selecionado
+                    if (clone.tagName === 'SELECT') {
+                        clone.value = input.value;
+                    }
+                    // Para checkboxes e radios, preserva o estado checked
+                    if (clone.type === 'checkbox' || clone.type === 'radio') {
+                        clone.checked = input.checked;
+                    }
+                    tempForm.appendChild(clone);
+                }
+            });
+        }
+        
+        document.body.appendChild(tempForm);
+        tempForm.submit();
+    });
+}
 
 function initMacrostageDrag() {
     const macrostageList = document.querySelector(".macrostage-list");

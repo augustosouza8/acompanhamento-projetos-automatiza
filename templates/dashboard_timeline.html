@@ -1,0 +1,2382 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard de Cronograma - Cronograma{% endblock %}
+
+{% block breadcrumbs %}
+    &raquo; Dashboard de Cronograma
+{% endblock %}
+
+{% block content %}
+<div class="card">
+    <h2>
+        Dashboard de Cronograma (Gantt)
+        <a href="{{ url_for('export_dashboard_timeline', **request.args) }}" class="link-button" style="margin-left: 16px;">
+            📥 Exportar para Excel
+        </a>
+    </h2>
+    <p class="small-text">Visualize o cronograma de todos os projetos e suas hierarquias em uma linha do tempo interativa.</p>
+</div>
+
+<div class="card">
+    <h3>Filtros</h3>
+    <form method="GET" action="{{ url_for('dashboard_timeline') }}">
+        <div class="project-form-fields">
+            <div class="field">
+                <label for="status">Status do projeto</label>
+                <select id="status" name="status" multiple>
+                    {% for status in filter_options.statuses %}
+                        <option value="{{ status }}" {% if status in (current_filters.status if current_filters.status is iterable and current_filters.status is not string else [current_filters.status] if current_filters.status else []) %}selected{% endif %}>
+                            {{ status }}
+                        </option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div class="field">
+                <label for="requesting_agency">Órgão demandante</label>
+                <select id="requesting_agency" name="requesting_agency" multiple>
+                    {% for agency in filter_options.requesting_agencies %}
+                        <option value="{{ agency }}" {% if agency in (current_filters.requesting_agency if current_filters.requesting_agency is iterable and current_filters.requesting_agency is not string else [current_filters.requesting_agency] if current_filters.requesting_agency else []) %}selected{% endif %}>
+                            {{ agency }}
+                        </option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div class="field">
+                <label for="coordinator">Coordenador</label>
+                <select id="coordinator" name="coordinator" multiple>
+                    {% for coord in filter_options.coordinators %}
+                        <option value="{{ coord }}" {% if coord in (current_filters.coordinator if current_filters.coordinator is iterable and current_filters.coordinator is not string else [current_filters.coordinator] if current_filters.coordinator else []) %}selected{% endif %}>
+                            {{ coord }}
+                        </option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div class="field">
+                <label for="project_type">Tipo de projeto</label>
+                <select id="project_type" name="project_type" multiple>
+                    <option value="robot" {% if "robot" in (current_filters.project_type if current_filters.project_type is iterable and current_filters.project_type is not string else [current_filters.project_type] if current_filters.project_type else []) %}selected{% endif %}>Robô</option>
+                    <option value="system" {% if "system" in (current_filters.project_type if current_filters.project_type is iterable and current_filters.project_type is not string else [current_filters.project_type] if current_filters.project_type else []) %}selected{% endif %}>Sistema</option>
+                    <option value="both" {% if "both" in (current_filters.project_type if current_filters.project_type is iterable and current_filters.project_type is not string else [current_filters.project_type] if current_filters.project_type else []) %}selected{% endif %}>Robô e Sistema</option>
+                    <option value="none" {% if "none" in (current_filters.project_type if current_filters.project_type is iterable and current_filters.project_type is not string else [current_filters.project_type] if current_filters.project_type else []) %}selected{% endif %}>Nenhum</option>
+                </select>
+            </div>
+
+            <div class="field">
+                <label for="date_start">Data início (período)</label>
+                <input type="date" id="date_start" name="date_start" value="{{ current_filters.date_start }}">
+            </div>
+
+            <div class="field">
+                <label for="date_end">Data fim (período)</label>
+                <input type="date" id="date_end" name="date_end" value="{{ current_filters.date_end }}">
+            </div>
+        </div>
+
+        <div style="margin-top: 16px;">
+            <button type="submit">Filtrar</button>
+            <a href="{{ url_for('dashboard_timeline') }}" class="link-button" style="margin-left: 8px;">Limpar filtros</a>
+        </div>
+    </form>
+</div>
+
+<div class="card">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+        <h3 style="margin: 0;">Cronograma</h3>
+        <div class="field" style="margin: 0; display: flex; align-items: center; gap: 8px;">
+            <label for="view-mode-select" style="margin: 0; font-weight: normal;">Visualização:</label>
+            <select id="view-mode-select" style="min-width: 120px;">
+                <option value="Day">Dia</option>
+                <option value="Week">Semana</option>
+                <option value="Month" selected>Mês</option>
+                <option value="Year">Ano</option>
+            </select>
+        </div>
+    </div>
+    {% if timeline_data|length == 0 %}
+        <div style="padding: 20px; background-color: #fff3cd; border: 1px solid #ffc107; border-radius: 4px; margin-bottom: 16px;">
+            <p style="margin: 0; color: #856404;"><strong>Atenção:</strong> Nenhum projeto encontrado com os filtros aplicados ou nenhum projeto possui datas válidas (start_date e end_date).</p>
+            <p style="margin: 8px 0 0 0; color: #856404; font-size: 0.9rem;">Para que um projeto apareça no cronograma, ele precisa ter tanto a data de início quanto a data de fim preenchidas. Essas datas são calculadas automaticamente a partir das tarefas do projeto.</p>
+        </div>
+    {% else %}
+        <p class="small-text" style="margin-bottom: 8px;">Exibindo {{ timeline_data|length }} item{{ 's' if timeline_data|length != 1 else '' }} no cronograma.</p>
+    {% endif %}
+    <!-- SOLUÇÃO: Wrapper com scroll e cabeçalho fixo usando CSS sticky -->
+    <!-- IMPORTANTE: width: 100% para forçar o container e permitir que o conteúdo interno crie scroll -->
+    <div id="gantt-wrapper" style="position: relative; max-height: 800px; width: 100%; overflow-y: auto; overflow-x: auto; border: 1px solid #ddd; border-radius: 4px; background: white;">
+        <!-- Container do Gantt com largura mínima para forçar scroll horizontal -->
+        <div id="gantt-container" style="min-height: 600px; min-width: 100%; display: inline-block;"></div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<!-- frappe-gantt CSS -->
+<link rel="stylesheet" href="https://unpkg.com/frappe-gantt@0.6.1/dist/frappe-gantt.css">
+
+<!-- frappe-gantt JavaScript -->
+<script src="https://unpkg.com/frappe-gantt@0.6.1/dist/frappe-gantt.min.js"></script>
+
+<script>
+// Dados da timeline em formato JSON
+const timelineData = {{ timeline_data | tojson }};
+
+// Debug: verifica se os dados foram carregados
+console.log('Timeline data:', timelineData);
+console.log('Number of items:', timelineData ? timelineData.length : 0);
+
+// Inicializa o gráfico Gantt quando a página carregar
+document.addEventListener("DOMContentLoaded", function() {
+    const container = document.getElementById('gantt-container');
+    
+    if (!container) {
+        console.error('Container #gantt-container não encontrado!');
+        return;
+    }
+
+    // Verifica se o Gantt está disponível
+    if (typeof Gantt === 'undefined') {
+        console.error('Biblioteca frappe-gantt não foi carregada!');
+        container.innerHTML = '<p style="padding: 20px; text-align: center; color: #d00;">Erro: Biblioteca Gantt não foi carregada. Verifique a conexão com a internet.</p>';
+        return;
+    }
+
+    if (timelineData && timelineData.length > 0) {
+        console.log('Inicializando Gantt com', timelineData.length, 'itens');
+        
+        try {
+            // Primeiro, valida e filtra os dados
+            const validItems = timelineData.filter(function(item) {
+                // Valida que todos os campos obrigatórios existem
+                if (!item.id || !item.name || !item.start || !item.end) {
+                    console.warn('Item inválido ignorado:', item);
+                    return false;
+                }
+                // Valida formato das datas
+                if (typeof item.start !== 'string' || typeof item.end !== 'string') {
+                    console.warn('Item com datas inválidas ignorado:', item);
+                    return false;
+                }
+                // Valida que a data de início é anterior à data de fim
+                if (new Date(item.start) > new Date(item.end)) {
+                    console.warn('Item com datas invertidas ignorado:', item);
+                    return false;
+                }
+                return true;
+            });
+
+            console.log('Itens válidos:', validItems.length, 'de', timelineData.length);
+
+            // Cria um mapa de IDs válidos para validar dependências
+            const validIds = new Set(validItems.map(item => item.id));
+
+            // Prepara os dados no formato correto para frappe-gantt
+            // IMPORTANTE: Removendo dependências temporariamente para evitar erros
+            // O frappe-gantt pode ter problemas com dependências que referenciam itens que não existem
+            let ganttData = validItems.map(function(item) {
+                // Por enquanto, não usamos dependências para evitar o erro
+                // As barras aparecerão todas no mesmo nível, mas funcionará
+                return {
+                    id: String(item.id),
+                    name: String(item.name),
+                    start: String(item.start),
+                    end: String(item.end),
+                    progress: Number(item.progress) || 0
+                    // dependencies removido temporariamente
+                };
+            });
+
+            console.log('Dados preparados para Gantt:', ganttData.length, 'itens');
+            console.log('Primeiros 3 itens:', ganttData.slice(0, 3));
+            
+            // Validação final antes de passar para o Gantt
+            if (!Array.isArray(ganttData)) {
+                throw new Error('ganttData não é um array: ' + typeof ganttData);
+            }
+            
+            if (ganttData.length === 0) {
+                throw new Error('Nenhum item válido para exibir no Gantt');
+            }
+            
+            // Verifica se todos os itens têm os campos obrigatórios
+            const invalidItems = ganttData.filter(item => {
+                const hasId = item && item.id;
+                const hasName = item && item.name;
+                const hasStart = item && item.start;
+                const hasEnd = item && item.end;
+                return !hasId || !hasName || !hasStart || !hasEnd;
+            });
+            
+            if (invalidItems.length > 0) {
+                console.error('Itens inválidos encontrados:', invalidItems.length);
+                console.error('Exemplo de item inválido:', invalidItems[0]);
+                // Remove itens inválidos em vez de lançar erro
+                const validGanttData = ganttData.filter(item => {
+                    return item && item.id && item.name && item.start && item.end;
+                });
+                console.warn('Removidos', ganttData.length - validGanttData.length, 'itens inválidos');
+                ganttData = validGanttData;
+                
+                if (ganttData.length === 0) {
+                    throw new Error('Todos os itens foram removidos por serem inválidos');
+                }
+            }
+
+            console.log('Inicializando Gantt com', ganttData.length, 'itens válidos...');
+            console.log('Exemplo de item válido:', ganttData[0]);
+            
+            // Salva ganttData em uma variável acessível globalmente para a função applyColors
+            window.ganttDataForColors = ganttData;
+            
+            // FASE 2: Seletor de modo de visualização
+            // Carrega preferência salva ou usa 'Month' como padrão
+            const VIEW_MODE_KEY = 'gantt-view-mode';
+            const savedViewMode = localStorage.getItem(VIEW_MODE_KEY) || 'Month';
+            
+            // Configuração mínima do Gantt para evitar erros
+            const ganttConfig = {
+                view_mode: savedViewMode,
+                header_height: 100,
+                column_width: 30,
+                step: 24,
+                bar_height: 20,
+                bar_corner_radius: 3,
+                arrow_curve: 5,
+                padding: 18,
+                date_format: 'YYYY-MM-DD',
+                on_click: function (task) {
+                    // Ao clicar em uma barra, navega para a URL associada
+                    try {
+                        const taskId = task._id || task.id;
+                        const originalTask = timelineData.find(t => t.id === taskId);
+                        if (originalTask && originalTask.url) {
+                            window.location.href = originalTask.url;
+                        }
+                    } catch (e) {
+                        console.error('Erro no clique:', e);
+                    }
+                }
+            };
+            
+            // Remove callbacks opcionais que podem causar problemas
+            // on_date_change, on_progress_change, on_view_change removidos temporariamente
+            
+            let gantt;
+            try {
+                gantt = new Gantt("#gantt-container", ganttData, ganttConfig);
+                console.log('Gantt criado com sucesso');
+            } catch (initError) {
+                console.error('Erro ao criar instância do Gantt:', initError);
+                console.error('Stack trace:', initError.stack);
+                console.error('Dados que causaram o erro (primeiros 5):', ganttData.slice(0, 5));
+                throw initError;
+            }
+
+            console.log('Gantt inicializado com sucesso');
+            
+            // FASE 2: Implementar seletor de modo de visualização
+            // VIEW_MODE_KEY e savedViewMode já foram declarados acima
+            const viewModeSelect = document.getElementById('view-mode-select');
+            
+            // Carregar preferência salva e aplicar no dropdown
+            if (viewModeSelect) {
+                viewModeSelect.value = savedViewMode;
+                
+                // Se a preferência salva for diferente de 'Month', aplicar no gantt
+                // (Mas como já foi aplicado no ganttConfig, só precisa atualizar o dropdown)
+                // Ainda assim, vamos garantir que está sincronizado
+                if (gantt && savedViewMode !== ganttConfig.view_mode) {
+                    // Aguarda um pouco para garantir que o gantt está totalmente inicializado
+                    setTimeout(function() {
+                        if (gantt && typeof gantt.change_view_mode === 'function') {
+                            gantt.change_view_mode(savedViewMode);
+                        }
+                    }, 100);
+                }
+            }
+            
+            // Event listener para mudanças no dropdown
+            if (viewModeSelect && gantt) {
+                viewModeSelect.addEventListener('change', function(e) {
+                    const selectedMode = e.target.value;
+                    
+                    // Salva preferência no localStorage
+                    localStorage.setItem(VIEW_MODE_KEY, selectedMode);
+                    
+                    // Aplica o modo de visualização
+                    if (gantt && typeof gantt.change_view_mode === 'function') {
+                        console.log('Alterando modo de visualização para:', selectedMode);
+                        gantt.change_view_mode(selectedMode);
+                    } else {
+                        console.warn('gantt.change_view_mode não está disponível');
+                    }
+                });
+                
+                console.log('Seletor de visualização configurado');
+            }
+
+            // FASE 1: FUNÇÃO DE DEBUG PARA MAPEAR ESTRUTURA COMPLETA DO SVG
+            // E identificar elementos do cabeçalho (header)
+            const debugSVGStructure = function(svg) {
+                console.log('=== DEBUG: ESTRUTURA COMPLETA DO SVG ===');
+                
+                const headerHeight = ganttConfig.header_height || 50;
+                console.log('Altura do cabeçalho configurada:', headerHeight);
+                
+                // Identifica elementos do cabeçalho (Y < headerHeight)
+                const allElements = Array.from(svg.querySelectorAll('*'));
+                const headerElements = allElements.filter(function(el) {
+                    const y = parseFloat(el.getAttribute('y') || 0);
+                    return y < headerHeight && y >= 0;
+                });
+                
+                console.log('Total de elementos no cabeçalho (Y < ' + headerHeight + '):', headerElements.length);
+                
+                // Identifica tipos de elementos no cabeçalho
+                const headerTexts = headerElements.filter(el => el.tagName === 'text');
+                const headerRects = headerElements.filter(el => el.tagName === 'rect');
+                const headerLines = headerElements.filter(el => el.tagName === 'line');
+                const headerGroups = headerElements.filter(el => el.tagName === 'g');
+                
+                console.log('  - Textos (datas):', headerTexts.length);
+                console.log('  - Retângulos:', headerRects.length);
+                console.log('  - Linhas:', headerLines.length);
+                console.log('  - Grupos:', headerGroups.length);
+                
+                // Loga primeiros elementos do cabeçalho como exemplo
+                if (headerTexts.length > 0) {
+                    console.log('Primeiros textos do cabeçalho:');
+                    headerTexts.slice(0, 5).forEach(function(text, idx) {
+                        const y = parseFloat(text.getAttribute('y') || 0);
+                        const content = text.textContent || '';
+                        console.log('  Text', idx + 1, '- Y:', y, 'Conteúdo:', content);
+                    });
+                }
+                
+                // Encontra todos os grupos bar-wrapper
+                const barWrappers = Array.from(svg.querySelectorAll('g.bar-wrapper'));
+                console.log('Total de grupos bar-wrapper encontrados:', barWrappers.length);
+                
+                // Analisa os primeiros 10 grupos em detalhe
+                const groupsToAnalyze = barWrappers.slice(0, 10);
+                groupsToAnalyze.forEach(function(group, groupIdx) {
+                    const groupId = group.id || '';
+                    const groupClass = group.getAttribute('class') || '';
+                    const dataTaskId = group.getAttribute('data-task-id') || '';
+                    const dataId = group.getAttribute('data-id') || '';
+                    
+                    console.log(`\n--- Grupo bar-wrapper ${groupIdx + 1} ---`);
+                    console.log('  ID:', groupId || '(vazio)');
+                    console.log('  Class:', groupClass);
+                    console.log('  data-task-id:', dataTaskId || '(vazio)');
+                    console.log('  data-id:', dataId || '(vazio)');
+                    
+                    // Encontra todos os elementos dentro do grupo
+                    const allRects = Array.from(group.querySelectorAll('rect'));
+                    const allTexts = Array.from(group.querySelectorAll('text'));
+                    const allGroups = Array.from(group.querySelectorAll('g'));
+                    
+                    console.log('  Elementos dentro do grupo:');
+                    console.log('    - Rects:', allRects.length);
+                    console.log('    - Texts:', allTexts.length);
+                    console.log('    - Grupos aninhados:', allGroups.length);
+                    
+                    // Analisa cada rect em detalhe
+                    allRects.forEach(function(rect, rectIdx) {
+                        const x = parseFloat(rect.getAttribute('x') || 0);
+                        const y = parseFloat(rect.getAttribute('y') || 0);
+                        const width = parseFloat(rect.getAttribute('width') || 0);
+                        const height = parseFloat(rect.getAttribute('height') || 0);
+                        const fill = rect.getAttribute('fill') || '';
+                        const stroke = rect.getAttribute('stroke') || '';
+                        const classAttr = rect.getAttribute('class') || '';
+                        const dataItemId = rect.getAttribute('data-item-id') || '';
+                        const dataCustomColor = rect.getAttribute('data-custom-color') || '';
+                        const style = rect.getAttribute('style') || '';
+                        
+                        // Verifica se é barra de progresso
+                        const isProgress = height > 8 && height < 60 && width > height;
+                        
+                        console.log(`    Rect ${rectIdx + 1}:`);
+                        console.log('      Posição:', `x=${x}, y=${y}, w=${width}, h=${height}`);
+                        console.log('      Cores:', `fill=${fill}, stroke=${stroke}`);
+                        console.log('      Class:', classAttr || '(vazio)');
+                        console.log('      data-item-id:', dataItemId || '(vazio)');
+                        console.log('      data-custom-color:', dataCustomColor || '(vazio)');
+                        console.log('      Style:', style.substring(0, 100) || '(vazio)');
+                        console.log('      É barra de progresso?', isProgress);
+                        
+                        // Verifica computed style
+                        const computedFill = window.getComputedStyle(rect).fill;
+                        const computedStroke = window.getComputedStyle(rect).stroke;
+                        console.log('      Computed fill:', computedFill);
+                        console.log('      Computed stroke:', computedStroke);
+                    });
+                    
+                    // Analisa grupos aninhados (bar-group)
+                    allGroups.forEach(function(nestedGroup, nestedIdx) {
+                        const nestedClass = nestedGroup.getAttribute('class') || '';
+                        const nestedRects = nestedGroup.querySelectorAll('rect');
+                        console.log(`    Grupo aninhado ${nestedIdx + 1} (${nestedClass}):`, nestedRects.length, 'rects');
+                    });
+                });
+                
+                // Estatísticas gerais
+                console.log('\n=== ESTATÍSTICAS GERAIS ===');
+                let totalRects = 0;
+                let progressBars = 0;
+                let coloredBars = 0;
+                
+                barWrappers.forEach(function(group) {
+                    const rects = group.querySelectorAll('rect');
+                    totalRects += rects.length;
+                    
+                    rects.forEach(function(rect) {
+                        const height = parseFloat(rect.getAttribute('height') || 0);
+                        const width = parseFloat(rect.getAttribute('width') || 0);
+                        if (height > 8 && height < 60 && width > height) {
+                            progressBars++;
+                        }
+                        if (rect.getAttribute('data-custom-color')) {
+                            coloredBars++;
+                        }
+                    });
+                });
+                
+                console.log('Total de rects em bar-wrappers:', totalRects);
+                console.log('Barras de progresso identificadas:', progressBars);
+                console.log('Barras com data-custom-color:', coloredBars);
+            };
+            
+            // Executa debug após renderização
+            setTimeout(function() {
+                const svg = container.querySelector('svg');
+                if (svg) {
+                    debugSVGStructure(svg);
+                }
+            }, 1500);
+
+            // Cria um mapa de IDs para cores e URLs (mantém referência aos dados originais)
+            const itemMetadata = {};
+            timelineData.forEach(function(item) {
+                if (item.id) {
+                    itemMetadata[item.id] = {
+                        custom_class: item.custom_class,
+                        url: item.url,
+                        name: item.name
+                    };
+                }
+            });
+            
+            console.log('Mapa de metadados criado com', Object.keys(itemMetadata).length, 'itens');
+
+            // Flag global para evitar loop infinito no MutationObserver
+            let isApplyingColors = false;
+            let applyColorsTimeout = null;
+            
+            // FASE 3: MELHORAR CSS DINÂMICO
+            // Função para criar/atualizar CSS dinâmico baseado em data-item-id
+            // Deve ser definida antes de applyColors para poder ser chamada dentro dela
+            const updateDynamicCSS = function(timelineData) {
+                // Remove stylesheet anterior se existir
+                const existingStyle = document.getElementById('gantt-dynamic-colors');
+                if (existingStyle) {
+                    existingStyle.remove();
+                }
+                
+                // Cria novo stylesheet
+                const style = document.createElement('style');
+                style.id = 'gantt-dynamic-colors';
+                
+                // Define as cores fixas
+                const colors = {
+                    'gantt-project': { fill: '#1a73e8', stroke: '#1a73e8', strokeWidth: '2' },
+                    'gantt-macro': { fill: '#34a853', stroke: '#34a853', strokeWidth: '1.5' },
+                    'gantt-stage': { fill: '#fbbc04', stroke: '#fbbc04', strokeWidth: '1' },
+                    'gantt-task': { fill: '#9aa0a6', stroke: '#9aa0a6', strokeWidth: '0.5' }
+                };
+                
+                let cssRules = '';
+                
+                // Gera regras CSS para cada item baseado em múltiplos seletores
+                if (timelineData && Array.isArray(timelineData)) {
+                    timelineData.forEach(function(item) {
+                        if (item && item.id && item.custom_class) {
+                            const itemColors = colors[item.custom_class];
+                            if (itemColors) {
+                                // FASE 3: Seletores mais específicos e múltiplos
+                                // 1. Seletor por data-item-id (mais específico)
+                                cssRules += `#gantt-container svg rect[data-item-id="${item.id}"] { `;
+                                cssRules += `fill: ${colors.fill} !important; `;
+                                cssRules += `stroke: ${colors.stroke} !important; `;
+                                cssRules += `stroke-width: ${colors.strokeWidth} !important; `;
+                                cssRules += `}\n`;
+                                
+                                // 2. Seletor por classe customizada
+                                const classType = item.custom_class.replace('gantt-', '');
+                                cssRules += `#gantt-container svg rect.gantt-${classType}[data-item-id="${item.id}"] { `;
+                                cssRules += `fill: ${colors.fill} !important; `;
+                                cssRules += `stroke: ${colors.stroke} !important; `;
+                                cssRules += `stroke-width: ${colors.strokeWidth} !important; `;
+                                cssRules += `}\n`;
+                                
+                                // 3. Seletor combinando classe e data-custom-color
+                                cssRules += `#gantt-container svg rect.gantt-custom-colored[data-item-id="${item.id}"] { `;
+                                cssRules += `fill: ${colors.fill} !important; `;
+                                cssRules += `stroke: ${colors.stroke} !important; `;
+                                cssRules += `stroke-width: ${colors.strokeWidth} !important; `;
+                                cssRules += `}\n`;
+                                
+                                // 4. Seletor para barras dentro de grupos com data-item-id
+                                cssRules += `#gantt-container svg g[data-item-id="${item.id}"] rect { `;
+                                cssRules += `fill: ${colors.fill} !important; `;
+                                cssRules += `stroke: ${colors.stroke} !important; `;
+                                cssRules += `stroke-width: ${colors.strokeWidth} !important; `;
+                                cssRules += `}\n`;
+                            }
+                        }
+                    });
+                }
+                
+                style.textContent = cssRules;
+                document.head.appendChild(style);
+                
+                console.log('CSS dinâmico atualizado com', timelineData ? timelineData.length * 4 : 0, 'regras (4 seletores por item)');
+            };
+            
+            // Função para aplicar cores baseado no custom_class do backend
+            // Define a função dentro do escopo onde todas as variáveis estão disponíveis
+            const applyColors = function() {
+                // Debounce: cancela execução anterior se houver uma pendente
+                if (applyColorsTimeout) {
+                    clearTimeout(applyColorsTimeout);
+                    applyColorsTimeout = null;
+                }
+                
+                // Se já está aplicando cores, ignora esta chamada
+                if (isApplyingColors) {
+                    console.log('applyColors já em execução, ignorando chamada duplicada');
+                    return;
+                }
+                
+                isApplyingColors = true;
+                console.log('=== applyColors chamada ===');
+                
+                // Atualiza a classe do container para CSS fallback
+                const container = document.getElementById('gantt-container');
+                if (!container) {
+                    console.error('Container #gantt-container não encontrado!');
+                    return;
+                }
+                
+                container.classList.remove('color-scheme-colors', 'color-scheme-grayscale');
+                container.classList.add('color-scheme-colors');
+                
+                // Define as cores fixas baseadas no custom_class
+                const colors = {
+                    'gantt-project': { fill: '#1a73e8', stroke: '#1a73e8', strokeWidth: '2' }, // Azul
+                    'gantt-macro': { fill: '#34a853', stroke: '#34a853', strokeWidth: '1.5' }, // Verde
+                    'gantt-stage': { fill: '#fbbc04', stroke: '#fbbc04', strokeWidth: '1' }, // Amarelo
+                    'gantt-task': { fill: '#9aa0a6', stroke: '#9aa0a6', strokeWidth: '0.5' } // Cinza
+                };
+                
+                const svg = container.querySelector('svg');
+                if (!svg) {
+                    console.warn('SVG não encontrado no container');
+                    return;
+                }
+                
+                // Não limpa cores aqui - a função applyColors principal já aplica as cores corretamente
+                // Limpar aqui causaria problemas porque as cores seriam removidas antes de serem aplicadas
+                
+                // Encontra todas as linhas (rows) no SVG que contêm barras
+                // O frappe-gantt geralmente coloca as barras em grupos específicos
+                const allRows = Array.from(svg.querySelectorAll('g'));
+                const rowsWithBars = [];
+                
+                // Função auxiliar para verificar se um rect é uma barra de progresso PRINCIPAL (visível)
+                // O frappe-gantt pode ter múltiplas barras: fundo, progresso, hover, etc.
+                // Esta função identifica a barra principal que deve ser colorida
+                const isProgressBar = function(rect) {
+                    const height = parseFloat(rect.getAttribute('height') || 0);
+                    const width = parseFloat(rect.getAttribute('width') || 0);
+                    const x = parseFloat(rect.getAttribute('x') || 0);
+                    const y = parseFloat(rect.getAttribute('y') || 0);
+                    const fill = rect.getAttribute('fill') || '';
+                    const classAttr = rect.getAttribute('class') || '';
+                    const opacity = parseFloat(rect.getAttribute('opacity') || 1);
+                    
+                    // Barras de progresso principais têm características específicas:
+                    // 1. Altura entre 8-60px (altura típica de uma barra)
+                    // 2. Largura maior que altura (barras são horizontais)
+                    // 3. Posicionadas na área de conteúdo (x > 0, y > 50 para evitar grid)
+                    // 4. Não são linhas de grid (grid tem height < 2px ou width < 2px)
+                    // 5. Não são fundos (fundos geralmente têm width/height muito grandes)
+                    // 6. Não são barras de progresso interno (geralmente menores e com opacity diferente)
+                    // 7. Geralmente têm fill visível (não transparente)
+                    
+                    // Verifica se tem a classe "bar" (barras principais têm essa classe)
+                    const hasBarClass = classAttr.includes('bar') && !classAttr.includes('bar-progress') && !classAttr.includes('handle');
+                    
+                    // Se tem classe "bar", é uma barra principal (menos restritivo)
+                    if (hasBarClass) {
+                        const isValidSize = height > 8 && height < 60 && width >= 5; // width >= 5 aceita barras pequenas
+                        const isValidPosition = x > 0 && y > 50 && y < 10000; // Y < 10000 para aceitar todas as barras
+                        const isNotGrid = !(height < 2 || width < 2);
+                        const isNotBackground = !(width > 5000 || height > 5000);
+                        const isNotHandle = !classAttr.includes('handle');
+                        
+                        // Verifica se não está em um grupo de hover ou estado especial
+                        const parentGroup = rect.closest('g');
+                        const parentClass = parentGroup ? (parentGroup.getAttribute('class') || '') : '';
+                        const isNotHoverState = !parentClass.includes('hover') && !parentClass.includes('selected');
+                        
+                        return isValidSize && isValidPosition && isNotGrid && isNotBackground && isNotHandle && isNotHoverState;
+                    }
+                    
+                    // Fallback: verifica outras características (mais restritivo)
+                    const isValidSize = height > 8 && height < 60 && width >= 5;
+                    const isValidPosition = x > 0 && y > 50 && y < 10000;
+                    const isNotGrid = !(height < 2 || width < 2);
+                    const isNotBackground = !(width > 5000 || height > 5000);
+                    const isNotHandle = !classAttr.includes('handle');
+                    
+                    // Verifica se não está em um grupo de hover ou estado especial
+                    const parentGroup = rect.closest('g');
+                    const parentClass = parentGroup ? (parentGroup.getAttribute('class') || '') : '';
+                    const isNotHoverState = !parentClass.includes('hover') && !parentClass.includes('selected');
+                    
+                    return isValidSize && isValidPosition && isNotGrid && isNotBackground && isNotHandle && isNotHoverState;
+                };
+                
+                // Função auxiliar para verificar se uma barra está na área visível do viewport
+                // ATENÇÃO: Esta função foi muito relaxada para aceitar todas as barras válidas
+                const isBarVisible = function(rect) {
+                    const rectY = parseFloat(rect.getAttribute('y') || 0);
+                    const rectHeight = parseFloat(rect.getAttribute('height') || 0);
+                    const rectX = parseFloat(rect.getAttribute('x') || 0);
+                    const rectWidth = parseFloat(rect.getAttribute('width') || 0);
+                    const classAttr = rect.getAttribute('class') || '';
+                    
+                    // Se tem classe "bar" e não é handle/progress, assume que é visível
+                    if (classAttr.includes('bar') && !classAttr.includes('bar-progress') && !classAttr.includes('handle')) {
+                        // Verifica apenas se não está muito fora do range (Y < 10000 para ser muito permissivo)
+                        return rectY >= 0 && rectY < 10000 && rectWidth >= 0 && rectHeight > 0;
+                    }
+                    
+                    // Verifica se a barra está dentro de um range Y razoável (área visível típica)
+                    // Aumentado o limite para 10000 para não rejeitar barras válidas
+                    const isInVisibleRange = rectY >= 0 && rectY < 10000;
+                    
+                    // Verifica se tem tamanho razoável (muito relaxado - width >= 0 aceita até barras vazias temporariamente)
+                    const hasValidSize = rectWidth >= 0 && rectHeight > 0;
+                    
+                    // Verifica computed style para ver se está realmente visível
+                    const computed = window.getComputedStyle(rect);
+                    const isComputedVisible = computed.visibility !== 'hidden' && 
+                                             computed.display !== 'none' && 
+                                             parseFloat(computed.opacity || 1) > 0.1;
+                    
+                    return isInVisibleRange && hasValidSize && isComputedVisible;
+                };
+                
+                // Função auxiliar para identificar a barra principal dentro de um grupo
+                // Retorna a barra que deve ser colorida (geralmente a maior ou mais visível)
+                const getMainBarFromGroup = function(group) {
+                    const allRects = Array.from(group.querySelectorAll('rect'));
+                    
+                    // PRIORIDADE 1: Busca barras com classe "bar" (não bar-progress, não handle)
+                    const barClassRects = allRects.filter(function(rect) {
+                        const classAttr = rect.getAttribute('class') || '';
+                        return classAttr.includes('bar') && 
+                               !classAttr.includes('bar-progress') && 
+                               !classAttr.includes('handle');
+                    });
+                    
+                    if (barClassRects.length > 0) {
+                        // Se há múltiplas, escolhe a maior (mais larga)
+                        return barClassRects.reduce(function(largest, current) {
+                            const largestWidth = parseFloat(largest.getAttribute('width') || 0);
+                            const currentWidth = parseFloat(current.getAttribute('width') || 0);
+                            return currentWidth > largestWidth ? current : largest;
+                        });
+                    }
+                    
+                    // PRIORIDADE 2: Usa isProgressBar (mais restritivo)
+                    const progressBars = allRects.filter(rect => isProgressBar(rect));
+                    
+                    if (progressBars.length > 0) {
+                        // Filtra apenas barras visíveis primeiro
+                        const visibleBars = progressBars.filter(rect => isBarVisible(rect));
+                        
+                        // Se há barras visíveis, usa apenas elas
+                        const barsToConsider = visibleBars.length > 0 ? visibleBars : progressBars;
+                        
+                        // Se há apenas uma barra, retorna ela
+                        if (barsToConsider.length === 1) {
+                            return barsToConsider[0];
+                        }
+                        
+                        // Se há múltiplas, escolhe a que está mais próxima do topo (menor Y) e maior largura
+                        return barsToConsider.reduce(function(best, current) {
+                            const bestY = parseFloat(best.getAttribute('y') || 999999);
+                            const currentY = parseFloat(current.getAttribute('y') || 999999);
+                            const bestWidth = parseFloat(best.getAttribute('width') || 0);
+                            const currentWidth = parseFloat(current.getAttribute('width') || 0);
+                            
+                            // Prioriza barras mais próximas do topo (menor Y)
+                            // Se Y é similar (diferença < 100), prioriza a mais larga
+                            if (Math.abs(bestY - currentY) < 100) {
+                                return currentWidth > bestWidth ? current : best;
+                            }
+                            return currentY < bestY ? current : best;
+                        });
+                    }
+                    
+                    // PRIORIDADE 3: Fallback - retorna primeira rect que não é handle/progress
+                    const fallbackBars = allRects.filter(function(rect) {
+                        const classAttr = rect.getAttribute('class') || '';
+                        return !classAttr.includes('handle') && !classAttr.includes('bar-progress');
+                    });
+                    
+                    return fallbackBars.length > 0 ? fallbackBars[0] : null;
+                };
+                
+                // Filtra linhas que não são do grid (grid geralmente tem classes específicas ou estão em grupos específicos)
+                allRows.forEach(function(row) {
+                    const rowClass = row.getAttribute('class') || '';
+                    const rowId = row.getAttribute('id') || '';
+                    
+                    // Ignora linhas de grid, eixos, etc.
+                    if (rowClass.includes('grid') || rowClass.includes('axis') || 
+                        rowId.includes('grid') || rowId.includes('axis')) {
+                        return;
+                    }
+                    
+                    const rects = row.querySelectorAll('rect');
+                    const progressBars = Array.from(rects).filter(rect => isProgressBar(rect));
+                    
+                    if (progressBars.length > 0) {
+                        // Ordena as barras da linha por X (da esquerda para direita)
+                        // A primeira barra é geralmente a barra principal
+                        const sortedBarsInRow = progressBars.sort(function(a, b) {
+                            const xA = parseFloat(a.getAttribute('x') || 0);
+                            const xB = parseFloat(b.getAttribute('x') || 0);
+                            return xA - xB;
+                        });
+                        
+                        // Pega a primeira barra (barra principal)
+                        const mainBar = sortedBarsInRow[0];
+                        const y = parseFloat(mainBar.getAttribute('y') || 0);
+                        
+                        // Só adiciona se a posição Y for válida (não é linha de grid no topo)
+                        if (y > 50) { // Grid geralmente está em Y < 50
+                            rowsWithBars.push({
+                                row: row,
+                                bar: mainBar,
+                                y: y,
+                                allBars: sortedBarsInRow
+                            });
+                        }
+                    }
+                });
+                
+                // Ordena as linhas por Y (de cima para baixo)
+                rowsWithBars.sort(function(a, b) {
+                    return a.y - b.y;
+                });
+                
+                // FASE 2: REFATORAÇÃO - Usar dados do backend diretamente
+                // Estratégia: Iterar pelos itens do timelineData e encontrar suas barras no SVG
+                // Usa o ID do item para mapear diretamente, sem inferir por nome
+                
+                console.log('=== APLICANDO CORES USANDO DADOS DO BACKEND ===');
+                console.log('Total de itens no timelineData:', timelineData.length);
+                console.log('Total de linhas com barras encontradas:', rowsWithBars.length);
+                console.log('Primeiros 10 itens:');
+                timelineData.slice(0, 10).forEach(function(item, idx) {
+                    console.log('  [' + idx + '] ID:', item.id, 'Nome:', item.name.trim(), 'Tipo:', item.custom_class);
+                });
+                
+                // Debug: Verificar estrutura do frappe-gantt
+                if (typeof gantt !== 'undefined' && gantt.tasks) {
+                    console.log('Gantt tasks disponíveis:', gantt.tasks.length);
+                    console.log('Primeiros 3 tasks do gantt:');
+                    gantt.tasks.slice(0, 3).forEach(function(task, idx) {
+                        console.log('  Task', idx, '- _id:', task._id, 'id:', task.id, 'name:', task.name);
+                    });
+                }
+                
+                let coloredCount = 0;
+                let skippedCount = 0;
+                
+                // Itera pelos itens do timelineData na ordem correta
+                // Para cada item, encontra suas barras no SVG e aplica cores baseado no custom_class
+                timelineData.forEach(function(item, itemIndex) {
+                    if (!item || !item.custom_class) {
+                        skippedCount++;
+                        return;
+                    }
+                    
+                    const itemColors = colors[item.custom_class];
+                    if (!itemColors) {
+                        skippedCount++;
+                        console.warn('⚠ Item sem cor definida:', item.name, 'custom_class:', item.custom_class);
+                        return;
+                    }
+                    
+                    // MÚLTIPLOS MÉTODOS DE BUSCA POR ID
+                    // Tenta vários métodos para encontrar as barras correspondentes ao item
+                    // PRIORIDADE: data-id primeiro (o frappe-gantt usa data-id nos grupos bar-wrapper)
+                    let barsFound = [];
+                    
+                    // Método 1: Buscar grupos SVG por data-id exato (PRIORIDADE - frappe-gantt usa isso!)
+                    const groupByDataId = svg.querySelector('g[data-id="' + item.id + '"]');
+                    if (groupByDataId) {
+                        // FASE 5: Usa getMainBarFromGroup para identificar barra principal
+                        const mainBar = getMainBarFromGroup(groupByDataId);
+                        if (mainBar) {
+                            barsFound = [mainBar]; // Apenas a barra principal
+                            if (itemIndex < 5) {
+                                console.log('  ✓ Encontrado via data-id exato no grupo:', item.id, '- Barra principal identificada');
+                            }
+                        } else {
+                            // Fallback: usa todas as barras de progresso
+                            const rects = groupByDataId.querySelectorAll('rect');
+                            barsFound = Array.from(rects).filter(rect => isProgressBar(rect));
+                            if (barsFound.length > 0 && itemIndex < 5) {
+                                console.log('  ✓ Encontrado via data-id exato no grupo:', item.id, '-', barsFound.length, 'barras (fallback)');
+                            }
+                        }
+                    }
+                    
+                    // Método 2: Buscar grupos SVG por data-id parcial
+                    if (barsFound.length === 0) {
+                        const groupsByDataIdPartial = svg.querySelectorAll('g[data-id*="' + item.id + '"]');
+                        if (groupsByDataIdPartial.length > 0) {
+                            // Encontra a melhor barra entre todos os grupos (não adiciona múltiplas)
+                            let bestBar = null;
+                            let bestBarY = Infinity;
+                            
+                            groupsByDataIdPartial.forEach(function(group) {
+                                const mainBar = getMainBarFromGroup(group);
+                                if (mainBar && isBarVisible(mainBar)) {
+                                    const barY = parseFloat(mainBar.getAttribute('y') || Infinity);
+                                    // Escolhe a barra mais próxima do topo (menor Y) que está visível
+                                    if (barY < bestBarY) {
+                                        bestBar = mainBar;
+                                        bestBarY = barY;
+                                    }
+                                }
+                            });
+                            
+                            if (bestBar) {
+                                barsFound = [bestBar]; // Apenas uma barra principal
+                                if (itemIndex < 5) {
+                                    console.log('  ✓ Encontrado via data-id parcial:', item.id, '- Barra principal visível identificada');
+                                }
+                            } else if (groupsByDataIdPartial.length > 0 && itemIndex < 5) {
+                                console.warn('  ⚠ Encontrado grupo mas nenhuma barra visível para:', item.id);
+                            }
+                        }
+                    }
+                    
+                    // Método 3: Buscar grupos SVG por ID exato
+                    if (barsFound.length === 0) {
+                        const groupById = svg.querySelector('g[id="' + item.id + '"]');
+                        if (groupById) {
+                            const mainBar = getMainBarFromGroup(groupById);
+                            if (mainBar) {
+                                barsFound = [mainBar];
+                            } else {
+                                const rects = groupById.querySelectorAll('rect');
+                                barsFound = Array.from(rects).filter(rect => isProgressBar(rect));
+                            }
+                        }
+                    }
+                    
+                    // Método 5: Buscar grupos SVG por data-task-id exato
+                    if (barsFound.length === 0) {
+                        const groupByDataTaskId = svg.querySelector('g[data-task-id="' + item.id + '"]');
+                        if (groupByDataTaskId) {
+                            const mainBar = getMainBarFromGroup(groupByDataTaskId);
+                            if (mainBar) {
+                                barsFound = [mainBar];
+                            } else {
+                                const rects = groupByDataTaskId.querySelectorAll('rect');
+                                barsFound = Array.from(rects).filter(rect => isProgressBar(rect));
+                            }
+                        }
+                    }
+                    
+                    // Método 6: Buscar grupos SVG por ID parcial (contains)
+                    if (barsFound.length === 0) {
+                        const groupsByIdPartial = svg.querySelectorAll('g[id*="' + item.id + '"]');
+                        if (groupsByIdPartial.length > 0) {
+                            groupsByIdPartial.forEach(function(group) {
+                                const mainBar = getMainBarFromGroup(group);
+                                if (mainBar) {
+                                    barsFound.push(mainBar);
+                                } else {
+                                    const rects = group.querySelectorAll('rect');
+                                    const progressBars = Array.from(rects).filter(rect => isProgressBar(rect));
+                                    barsFound = barsFound.concat(progressBars);
+                                }
+                            });
+                        }
+                    }
+                    
+                    // Método 7: Buscar grupos SVG por data-task-id parcial
+                    if (barsFound.length === 0) {
+                        const groupsByDataTaskIdPartial = svg.querySelectorAll('g[data-task-id*="' + item.id + '"]');
+                        if (groupsByDataTaskIdPartial.length > 0) {
+                            groupsByDataTaskIdPartial.forEach(function(group) {
+                                const mainBar = getMainBarFromGroup(group);
+                                if (mainBar) {
+                                    barsFound.push(mainBar);
+                                } else {
+                                    const rects = group.querySelectorAll('rect');
+                                    const progressBars = Array.from(rects).filter(rect => isProgressBar(rect));
+                                    barsFound = barsFound.concat(progressBars);
+                                }
+                            });
+                        }
+                    }
+                    
+                    // Método 7: Buscar barras diretamente por data-item-id (barras já marcadas)
+                    if (barsFound.length === 0) {
+                        const existingBars = svg.querySelectorAll('rect[data-item-id="' + item.id + '"]');
+                        if (existingBars.length > 0) {
+                            barsFound = Array.from(existingBars).filter(rect => isProgressBar(rect));
+                        }
+                    }
+                    
+                    // Método 8: Usar objeto gantt.tasks (se disponível)
+                    if (barsFound.length === 0 && typeof gantt !== 'undefined' && gantt.tasks) {
+                        const task = gantt.tasks.find(function(t) {
+                            return (t._id === item.id) || (t.id === item.id) || (String(t._id) === String(item.id)) || (String(t.id) === String(item.id));
+                        });
+                        if (task) {
+                            // O frappe-gantt pode armazenar referência ao elemento bar em diferentes propriedades
+                            const barElement = task.$bar || task.bar_wrapper || task.$bar_wrapper;
+                            if (barElement) {
+                                if (isProgressBar(barElement)) {
+                                    barsFound = [barElement];
+                                } else {
+                                    // Pode ser um grupo, buscar rects dentro
+                                    const rects = barElement.querySelectorAll('rect');
+                                    const progressBars = Array.from(rects).filter(rect => isProgressBar(rect));
+                                    barsFound = progressBars;
+                                }
+                            }
+                            
+                            // Se ainda não encontrou, tenta buscar pelo ID do task no SVG
+                            if (barsFound.length === 0) {
+                                const taskId = task._id || task.id;
+                                const groupByTaskId = svg.querySelector('g[data-id="' + taskId + '"]') ||
+                                                     svg.querySelector('g[data-task-id="' + taskId + '"]') || 
+                                                     svg.querySelector('g[id="' + taskId + '"]');
+                                if (groupByTaskId) {
+                                    const mainBar = getMainBarFromGroup(groupByTaskId);
+                                    if (mainBar) {
+                                        barsFound = [mainBar];
+                                    } else {
+                                        const rects = groupByTaskId.querySelectorAll('rect');
+                                        barsFound = Array.from(rects).filter(rect => isProgressBar(rect));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    
+                    // Método 9: Mapeamento por índice com validação
+                    // Tenta mapear pela posição, mas valida se faz sentido
+                    if (barsFound.length === 0) {
+                        // Primeiro tenta índice exato
+                        if (itemIndex < rowsWithBars.length) {
+                            const rowData = rowsWithBars[itemIndex];
+                            if (rowData) {
+                                const allRectsInRow = rowData.row.querySelectorAll('rect');
+                                const progressBars = Array.from(allRectsInRow).filter(rect => isProgressBar(rect));
+                                if (progressBars.length > 0) {
+                                    barsFound = progressBars;
+                                } else if (rowData.allBars.length > 0) {
+                                    barsFound = rowData.allBars;
+                                }
+                            }
+                        }
+                        
+                        // Se não encontrou no índice exato, tenta índices próximos (±2)
+                        if (barsFound.length === 0) {
+                            for (let offset = 1; offset <= 2; offset++) {
+                                // Tenta índice anterior
+                                if (itemIndex - offset >= 0 && itemIndex - offset < rowsWithBars.length) {
+                                    const rowData = rowsWithBars[itemIndex - offset];
+                                    if (rowData) {
+                                        const allRectsInRow = rowData.row.querySelectorAll('rect');
+                                        const progressBars = Array.from(allRectsInRow).filter(rect => isProgressBar(rect));
+                                        if (progressBars.length > 0) {
+                                            barsFound = progressBars;
+                                            break;
+                                        }
+                                    }
+                                }
+                                
+                                // Tenta índice posterior
+                                if (barsFound.length === 0 && itemIndex + offset < rowsWithBars.length) {
+                                    const rowData = rowsWithBars[itemIndex + offset];
+                                    if (rowData) {
+                                        const allRectsInRow = rowData.row.querySelectorAll('rect');
+                                        const progressBars = Array.from(allRectsInRow).filter(rect => isProgressBar(rect));
+                                        if (progressBars.length > 0) {
+                                            barsFound = progressBars;
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    
+                    // Método 10: Buscar por texto próximo (último recurso)
+                    // Procura grupos que contenham texto similar ao nome do item
+                    if (barsFound.length === 0) {
+                        const itemNameNormalized = item.name.trim().toLowerCase();
+                        const allGroups = Array.from(svg.querySelectorAll('g'));
+                        allGroups.forEach(function(group) {
+                            const texts = group.querySelectorAll('text');
+                            texts.forEach(function(text) {
+                                const textContent = (text.textContent || '').trim().toLowerCase();
+                                // Se o texto contém parte significativa do nome do item
+                                if (textContent.length > 3 && itemNameNormalized.length > 3) {
+                                    const textWords = textContent.split(/\s+/).filter(w => w.length > 2);
+                                    const itemWords = itemNameNormalized.split(/\s+/).filter(w => w.length > 2);
+                                    const matchingWords = textWords.filter(w => itemWords.some(iw => iw.includes(w) || w.includes(iw)));
+                                    
+                                    // Se pelo menos 2 palavras correspondem, considera um match
+                                    if (matchingWords.length >= 2 || (matchingWords.length >= 1 && textContent.length > 10)) {
+                                        const rects = group.querySelectorAll('rect');
+                                        const progressBars = Array.from(rects).filter(rect => isProgressBar(rect));
+                                        if (progressBars.length > 0) {
+                                            barsFound = barsFound.concat(progressBars);
+                                        }
+                                    }
+                                }
+                            });
+                        });
+                    }
+                    
+                    // FASE 3: Aplica cores diretamente pelo custom_class do backend
+                    // CRÍTICO: Verifica se a barra já foi colorida por outro item antes de aplicar
+                    if (barsFound.length > 0) {
+                        // Filtra barras que já foram coloridas por outro item
+                        const uncoloredBars = barsFound.filter(function(bar) {
+                            const existingItemId = bar.getAttribute('data-item-id');
+                            // Se já tem data-item-id de outro item, não deve ser reutilizada
+                            return !existingItemId || existingItemId === item.id;
+                        });
+                        
+                        // Se todas as barras já foram usadas, tenta encontrar uma barra nova
+                        let barsToColor = uncoloredBars.length > 0 ? uncoloredBars : [];
+                        
+                        // Se ainda não encontrou, tenta barras visíveis
+                        if (barsToColor.length === 0) {
+                            const visibleBars = barsFound.filter(bar => isBarVisible(bar));
+                            barsToColor = visibleBars.length > 0 ? visibleBars : barsFound.slice(0, 1);
+                        }
+                        
+                        // Filtra novamente para garantir que não está reutilizando
+                        barsToColor = barsToColor.filter(function(bar) {
+                            const existingItemId = bar.getAttribute('data-item-id');
+                            return !existingItemId || existingItemId === item.id;
+                        });
+                        
+                        if (barsToColor.length > 0) {
+                            // Aplica cores apenas na primeira barra (barra principal) que não foi usada
+                            const mainBar = barsToColor[0];
+                            
+                            // Verificação final: se a barra já tem data-item-id de outro item, pula
+                            const finalItemId = mainBar.getAttribute('data-item-id');
+                            if (finalItemId && finalItemId !== item.id) {
+                                if (itemIndex < 10) {
+                                    console.warn('  ⚠ Barra já usada por outro item:', finalItemId, '- Pulando item:', item.id);
+                                }
+                                skippedCount++;
+                                return; // Pula este item
+                            }
+                            
+                            // Aplica cores apenas na barra principal (não em todas)
+                            [mainBar].forEach(function(barElement, barIdx) {
+                            // FASE 2: LOGS DETALHADOS DURANTE APLICAÇÃO DE CORES
+                            const beforeX = parseFloat(barElement.getAttribute('x') || 0);
+                            const beforeY = parseFloat(barElement.getAttribute('y') || 0);
+                            const beforeWidth = parseFloat(barElement.getAttribute('width') || 0);
+                            const beforeHeight = parseFloat(barElement.getAttribute('height') || 0);
+                            const beforeFill = barElement.getAttribute('fill') || '';
+                            const beforeStroke = barElement.getAttribute('stroke') || '';
+                            const beforeClass = barElement.getAttribute('class') || '';
+                            const beforeDataItemId = barElement.getAttribute('data-item-id') || '';
+                            
+                            // Log detalhado para primeiros itens
+                            if (itemIndex < 10) {
+                                console.log(`  [DEBUG] Aplicando cor na barra principal do item ${itemIndex}:`);
+                                console.log('    Posição:', `x=${beforeX}, y=${beforeY}, w=${beforeWidth}, h=${beforeHeight}`);
+                                console.log('    Antes - fill:', beforeFill, 'stroke:', beforeStroke);
+                                console.log('    Antes - class:', beforeClass || '(vazio)');
+                                console.log('    Antes - data-item-id:', beforeDataItemId || '(vazio)');
+                                console.log('    É barra de progresso?', isProgressBar(barElement));
+                                
+                                // Verifica visibilidade
+                                const computedBefore = window.getComputedStyle(barElement);
+                                console.log('    Computed antes - fill:', computedBefore.fill, 'stroke:', computedBefore.stroke);
+                                console.log('    Visibilidade:', computedBefore.visibility, 'display:', computedBefore.display);
+                            }
+                            
+                            // Salva a cor original
+                            if (!barElement.hasAttribute('data-original-fill')) {
+                                const currentFill = barElement.getAttribute('fill') || '#ddd';
+                                barElement.setAttribute('data-original-fill', currentFill);
+                            }
+                            
+                            // FASE 6: APLICAÇÃO ROBUSTA COM MÚLTIPLAS CAMADAS
+                            // Usa múltiplos métodos para garantir persistência máxima
+                            
+                            // CAMADA 1: Atributos de identificação (PRIMEIRO - antes de qualquer estilo)
+                            barElement.setAttribute('data-item-id', item.id);
+                            barElement.setAttribute('data-custom-color', 'true');
+                            barElement.setAttribute('data-item-type', item.custom_class);
+                            
+                            // CAMADA 2: Atributos SVG inline (mais básico, funciona sempre)
+                            barElement.setAttribute('fill', itemColors.fill);
+                            barElement.setAttribute('stroke', itemColors.stroke);
+                            barElement.setAttribute('stroke-width', itemColors.strokeWidth);
+                            
+                            // CAMADA 3: Style inline com !important (sobrescreve CSS)
+                            barElement.style.setProperty('fill', itemColors.fill, 'important');
+                            barElement.style.setProperty('stroke', itemColors.stroke, 'important');
+                            barElement.style.setProperty('stroke-width', itemColors.strokeWidth, 'important');
+                            
+                            // CAMADA 4: Remove classes conflitantes do frappe-gantt
+                            const currentClass = barElement.getAttribute('class') || '';
+                            if (currentClass) {
+                                const newClass = currentClass.split(' ').filter(c => 
+                                    !c.includes('bar-fill') && !c.includes('bar-stroke') && 
+                                    !c.includes('gantt-bar') && !c.includes('progress-bar')
+                                ).join(' ');
+                                if (newClass !== currentClass) {
+                                    barElement.setAttribute('class', newClass);
+                                }
+                            }
+                            
+                            // CAMADA 5: Adiciona classes CSS customizadas (para seletores CSS)
+                            barElement.classList.add('gantt-custom-colored');
+                            barElement.classList.add('gantt-' + item.custom_class.replace('gantt-', ''));
+                            barElement.classList.add('gantt-item-' + item.id.replace(/[^a-zA-Z0-9]/g, '-'));
+                            
+                            // CAMADA 6: Reaplica atributos após todas as modificações (garantia extra)
+                            barElement.setAttribute('data-item-id', item.id);
+                            barElement.setAttribute('fill', itemColors.fill);
+                            barElement.setAttribute('stroke', itemColors.stroke);
+                            
+                            // CAMADA 7: Força atualização visual (trigger reflow)
+                            const originalDisplay = barElement.style.display;
+                            barElement.style.display = 'none';
+                            barElement.offsetHeight; // Trigger reflow
+                            barElement.style.display = originalDisplay || '';
+                            
+                            // CAMADA 8: Reaplica estilos após reflow (garantia final)
+                            barElement.style.setProperty('fill', itemColors.fill, 'important');
+                            barElement.style.setProperty('stroke', itemColors.stroke, 'important');
+                            
+                            // FASE 2: VERIFICAÇÃO IMEDIATA APÓS APLICAÇÃO
+                            if (itemIndex < 10) {
+                                const afterFill = barElement.getAttribute('fill') || '';
+                                const afterStroke = barElement.getAttribute('stroke') || '';
+                                const afterDataItemId = barElement.getAttribute('data-item-id') || '';
+                                const computedAfter = window.getComputedStyle(barElement);
+                                
+                                console.log('    Depois - fill:', afterFill, 'stroke:', afterStroke);
+                                console.log('    Depois - data-item-id:', afterDataItemId || '(vazio)');
+                                console.log('    Computed depois - fill:', computedAfter.fill, 'stroke:', computedAfter.stroke);
+                                
+                                // Verifica se a cor foi aplicada corretamente
+                                if (afterFill !== itemColors.fill && computedAfter.fill !== itemColors.fill) {
+                                    console.warn('    ⚠ PROBLEMA: Cor não foi aplicada! Esperado:', itemColors.fill, 'Atual fill:', afterFill, 'Computed:', computedAfter.fill);
+                                } else {
+                                    console.log('    ✓ Cor aplicada com sucesso');
+                                }
+                                
+                                // Verifica se data-item-id foi aplicado
+                                if (afterDataItemId !== item.id) {
+                                    console.warn('    ⚠ PROBLEMA: data-item-id não foi aplicado! Esperado:', item.id, 'Atual:', afterDataItemId);
+                                } else {
+                                    console.log('    ✓ data-item-id aplicado com sucesso');
+                                }
+                            }
+                            
+                            // 7. Cursor pointer se tiver URL
+                            if (item.url) {
+                                barElement.style.cursor = 'pointer';
+                                barElement.setAttribute('title', 'Clique para ver detalhes: ' + item.name.trim());
+                            }
+                        });
+                        
+                            coloredCount++;
+                            
+                            if (itemIndex < 20 || barsToColor.length === 0) {
+                                const barY = mainBar ? parseFloat(mainBar.getAttribute('y') || 0) : 0;
+                                const isVisible = mainBar ? isBarVisible(mainBar) : false;
+                                console.log('✓ Cor aplicada - Item', itemIndex, ':', item.name.trim(), '(', item.custom_class, ') ->', itemColors.fill, '- 1 barra principal, Y:', barY, 'Visível:', isVisible);
+                            }
+                        } else {
+                            skippedCount++;
+                            if (itemIndex < 20) {
+                                console.warn('⚠ Todas as barras encontradas já foram usadas por outros itens para:', item.name.trim(), '(ID:', item.id, ', índice', itemIndex, ', tipo:', item.custom_class + ')');
+                            }
+                        }
+                    } else {
+                        skippedCount++;
+                        console.warn('⚠ Nenhuma barra encontrada para item:', item.name.trim(), '(ID:', item.id, ', índice', itemIndex, ', tipo:', item.custom_class + ')');
+                        
+                        // Debug adicional para itens não mapeados
+                        if (skippedCount <= 15) {
+                            console.warn('  Tentando métodos alternativos...');
+                            
+                            // Tenta encontrar qualquer barra próxima por posição
+                            if (itemIndex < rowsWithBars.length) {
+                                const nearbyRow = rowsWithBars[itemIndex];
+                                console.warn('  Linha próxima encontrada na posição', itemIndex, '- Y:', nearbyRow.y);
+                                const nearbyBars = nearbyRow.row.querySelectorAll('rect');
+                                console.warn('  Total de rects na linha:', nearbyBars.length);
+                                
+                                // Tenta aplicar cor mesmo sem match perfeito (último recurso)
+                                const progressBars = Array.from(nearbyBars).filter(rect => isProgressBar(rect));
+                                if (progressBars.length > 0) {
+                                    console.warn('  Aplicando cor por proximidade (fallback)...');
+                                    progressBars.forEach(function(barElement) {
+                                        barElement.setAttribute('fill', itemColors.fill);
+                                        barElement.style.setProperty('fill', itemColors.fill, 'important');
+                                        barElement.setAttribute('stroke', itemColors.stroke);
+                                        barElement.style.setProperty('stroke', itemColors.stroke, 'important');
+                                        barElement.setAttribute('stroke-width', itemColors.strokeWidth);
+                                        barElement.style.setProperty('stroke-width', itemColors.strokeWidth, 'important');
+                                        barElement.setAttribute('data-item-id', item.id);
+                                        barElement.setAttribute('data-custom-color', 'true');
+                                    });
+                                    coloredCount++;
+                                    skippedCount--; // Não conta como skipped se aplicou por proximidade
+                                }
+                            }
+                        }
+                    }
+                });
+                
+                console.log('=== RESUMO ===');
+                console.log('Itens processados:', coloredCount, 'de', timelineData.length);
+                console.log('Itens não mapeados:', skippedCount);
+                
+                // Verificação final: Se muitos itens não foram mapeados, tenta mapeamento forçado por índice
+                if (skippedCount > timelineData.length * 0.1) {
+                    console.warn('⚠ Muitos itens não mapeados (', skippedCount, 'de', timelineData.length, '). Tentando mapeamento forçado por índice...');
+                    
+                    // Mapeia todos os itens restantes por índice diretamente
+                    timelineData.forEach(function(item, itemIndex) {
+                        if (!item || !item.custom_class) return;
+                        
+                        const itemColors = colors[item.custom_class];
+                        if (!itemColors) return;
+                        
+                        // Verifica se já foi colorido
+                        const existingBars = svg.querySelectorAll('rect[data-item-id="' + item.id + '"]');
+                        if (existingBars.length > 0) return; // Já foi colorido
+                        
+                        // Tenta mapear por índice
+                        if (itemIndex < rowsWithBars.length) {
+                            const rowData = rowsWithBars[itemIndex];
+                            if (rowData) {
+                                const allRectsInRow = rowData.row.querySelectorAll('rect');
+                                const progressBars = Array.from(allRectsInRow).filter(rect => isProgressBar(rect));
+                                
+                                if (progressBars.length > 0) {
+                                    progressBars.forEach(function(barElement) {
+                                        // Verifica se já tem data-item-id de outro item
+                                        const existingItemId = barElement.getAttribute('data-item-id');
+                                        if (!existingItemId) {
+                                            // Aplica cor
+                                            barElement.setAttribute('fill', itemColors.fill);
+                                            barElement.style.setProperty('fill', itemColors.fill, 'important');
+                                            barElement.setAttribute('stroke', itemColors.stroke);
+                                            barElement.style.setProperty('stroke', itemColors.stroke, 'important');
+                                            barElement.setAttribute('stroke-width', itemColors.strokeWidth);
+                                            barElement.style.setProperty('stroke-width', itemColors.strokeWidth, 'important');
+                                            barElement.setAttribute('data-item-id', item.id);
+                                            barElement.setAttribute('data-custom-color', 'true');
+                                            coloredCount++;
+                                        }
+                                    });
+                                }
+                            }
+                        }
+                    });
+                    
+                    console.log('Após mapeamento forçado:', coloredCount, 'itens coloridos');
+                }
+                
+                // Atualiza CSS dinâmico para garantir persistência
+                updateDynamicCSS(timelineData);
+                
+                // FASE 4: VERIFICAÇÃO DE COMPUTED STYLES E ESPECIFICIDADE CSS
+                // Verifica se o CSS dinâmico está funcionando corretamente
+                setTimeout(function() {
+                    console.log('=== VERIFICAÇÃO DE CSS E COMPUTED STYLES ===');
+                    
+                    // Verifica alguns itens para testar especificidade
+                    timelineData.slice(0, 5).forEach(function(item) {
+                        if (!item || !item.custom_class) return;
+                        
+                        const itemColors = colors[item.custom_class];
+                        if (!itemColors) return;
+                        
+                        // Encontra barras com data-item-id
+                        const bars = svg.querySelectorAll('rect[data-item-id="' + item.id + '"]');
+                        
+                        if (bars.length > 0) {
+                            bars.forEach(function(bar, barIdx) {
+                                if (barIdx === 0) { // Apenas primeira barra de cada item
+                                    const computedStyle = window.getComputedStyle(bar);
+                                    const attrFill = bar.getAttribute('fill') || '';
+                                    const styleFill = bar.style.fill || '';
+                                    
+                                    console.log(`Item: ${item.name.trim()} (${item.custom_class})`);
+                                    console.log('  Attr fill:', attrFill || '(vazio)');
+                                    console.log('  Style fill:', styleFill || '(vazio)');
+                                    console.log('  Computed fill:', computedStyle.fill);
+                                    console.log('  Computed stroke:', computedStyle.stroke);
+                                    
+                                    // Verifica especificidade de seletores CSS
+                                    const testSelectors = [
+                                        `rect[data-item-id="${item.id}"]`,
+                                        `.gantt-custom-colored[data-item-id="${item.id}"]`,
+                                        `g[data-id="${item.id}"] rect`
+                                    ];
+                                    
+                                    testSelectors.forEach(function(selector) {
+                                        const matchingElements = svg.querySelectorAll(selector);
+                                        if (matchingElements.length > 0) {
+                                            console.log(`  Seletor "${selector}": ${matchingElements.length} elemento(s) encontrado(s)`);
+                                        }
+                                    });
+                                }
+                            });
+                        }
+                    });
+                }, 1000);
+                
+                // FASE 2: VALIDAÇÃO VISUAL COM COMPUTED STYLES
+                // Verifica se as cores aplicadas correspondem às esperadas usando computed styles
+                setTimeout(function() {
+                    let validationErrors = 0;
+                    let validatedItems = 0;
+                    let validationDetails = [];
+                    
+                    // Define as cores fixas para validação
+                    const colorsForValidation = {
+                        'gantt-project': { fill: '#1a73e8', stroke: '#1a73e8', strokeWidth: '2' },
+                        'gantt-macro': { fill: '#34a853', stroke: '#34a853', strokeWidth: '1.5' },
+                        'gantt-stage': { fill: '#fbbc04', stroke: '#fbbc04', strokeWidth: '1' },
+                        'gantt-task': { fill: '#9aa0a6', stroke: '#9aa0a6', strokeWidth: '0.5' }
+                    };
+                    
+                    console.log('=== VALIDAÇÃO DE CORES COM COMPUTED STYLES ===');
+                    
+                    // Valida cada item do timelineData
+                    timelineData.forEach(function(item, itemIndex) {
+                        if (!item || !item.custom_class) return;
+                        
+                        const expectedColors = colorsForValidation[item.custom_class];
+                        if (!expectedColors) return;
+                        
+                        // Encontra todas as barras com data-item-id deste item
+                        const allBars = svg.querySelectorAll('rect[data-item-id="' + item.id + '"]');
+                        
+                        if (allBars.length > 0) {
+                            validatedItems++;
+                            allBars.forEach(function(bar) {
+                                // Verifica atributo fill
+                                const attrFill = bar.getAttribute('fill') || '';
+                                // Verifica computed style fill (mais confiável)
+                                const computedFill = window.getComputedStyle(bar).fill;
+                                // Converte RGB para hex se necessário
+                                let computedFillHex = computedFill;
+                                if (computedFill.startsWith('rgb')) {
+                                    const rgb = computedFill.match(/\d+/g);
+                                    if (rgb && rgb.length >= 3) {
+                                        computedFillHex = '#' + rgb.map(x => {
+                                            const hex = parseInt(x).toString(16);
+                                            return hex.length === 1 ? '0' + hex : hex;
+                                        }).join('');
+                                    }
+                                }
+                                
+                                // Verifica se a cor corresponde (tolerância para variações de RGB)
+                                const fillMatches = attrFill === expectedColors.fill || 
+                                                   computedFillHex.toLowerCase() === expectedColors.fill.toLowerCase() ||
+                                                   computedFill === expectedColors.fill;
+                                
+                                if (!fillMatches && computedFill !== 'none' && computedFill !== '' && computedFill !== 'transparent') {
+                                    validationErrors++;
+                                    const detail = {
+                                        item: item.name.trim(),
+                                        expected: expectedColors.fill,
+                                        attrFill: attrFill,
+                                        computedFill: computedFill,
+                                        computedHex: computedFillHex,
+                                        type: item.custom_class
+                                    };
+                                    validationDetails.push(detail);
+                                    
+                                    if (validationErrors <= 10) {
+                                        console.warn('⚠ Validação:', item.name.trim(), '- Esperado:', expectedColors.fill, 
+                                                   'Attr:', attrFill || '(vazio)', 
+                                                   'Computed:', computedFill, 
+                                                   'Computed Hex:', computedFillHex,
+                                                   'Tipo:', item.custom_class);
+                                    }
+                                } else if (itemIndex < 10) {
+                                    console.log('✓ Validação OK:', item.name.trim(), '- Fill:', computedFill, 'Tipo:', item.custom_class);
+                                }
+                            });
+                        } else if (itemIndex < 20) {
+                            // Log apenas para os primeiros itens não mapeados
+                            console.warn('⚠ Validação: Nenhuma barra encontrada para', item.name.trim(), '(índice', itemIndex + ')');
+                            
+                            // Tenta encontrar barras sem data-item-id mas que podem ter sido coloridas
+                            const groupByDataId = svg.querySelector('g[data-id="' + item.id + '"]');
+                            if (groupByDataId) {
+                                const rectsInGroup = groupByDataId.querySelectorAll('rect');
+                                console.warn('  Mas encontrado grupo com data-id:', item.id, '-', rectsInGroup.length, 'rects dentro');
+                            }
+                        }
+                    });
+                    
+                    console.log('=== RESUMO DA VALIDAÇÃO ===');
+                    console.log('Itens validados:', validatedItems, 'de', timelineData.length);
+                    console.log('Erros encontrados:', validationErrors);
+                    
+                    if (validationErrors > 0) {
+                        console.warn('⚠ Validação visual:', validationErrors, 'barras com cores que não correspondem ao esperado');
+                        console.log('Detalhes dos erros:', validationDetails.slice(0, 5));
+                    } else {
+                        console.log('✓ Validação visual: Todas as cores aplicadas correspondem ao esperado');
+                    }
+                    
+                    // Libera flag após validação
+                    isApplyingColors = false;
+                }, 500); // Aumentado para 500ms para dar tempo das cores serem aplicadas
+            };
+            
+            // Torna applyColors acessível globalmente
+            window.applyGanttColors = applyColors;
+            
+            // Aplica cores após o Gantt renderizar (máximo 5 tentativas)
+            const applyColorsWithRetry = function(attempt) {
+                if (attempt > 5) {
+                    console.warn('Máximo de tentativas de aplicar cores atingido');
+                    return;
+                }
+                
+                const container = document.getElementById('gantt-container');
+                if (!container) {
+                    setTimeout(function() {
+                        applyColorsWithRetry(attempt + 1);
+                    }, 500);
+                    return;
+                }
+                
+                const svg = container.querySelector('svg');
+                if (!svg) {
+                    console.log('Tentativa', attempt, '- SVG ainda não renderizado, tentando novamente...');
+                    setTimeout(function() {
+                        applyColorsWithRetry(attempt + 1);
+                    }, 500);
+                    return;
+                }
+                
+                // Verifica se há barras de progresso (não apenas qualquer rect)
+                const allRects = svg.querySelectorAll('rect');
+                let progressBars = 0;
+                allRects.forEach(function(rect) {
+                    const height = parseFloat(rect.getAttribute('height') || 0);
+                    const width = parseFloat(rect.getAttribute('width') || 0);
+                    if (height > 8 && height < 60 && width > height) {
+                        progressBars++;
+                    }
+                });
+                
+                if (progressBars === 0) {
+                    console.log('Tentativa', attempt, '- Barras ainda não renderizadas, tentando novamente...');
+                    setTimeout(function() {
+                        applyColorsWithRetry(attempt + 1);
+                    }, 500);
+                } else {
+                    console.log('Barras encontradas na tentativa', attempt, '(', progressBars, 'barras) - Aplicando cores...');
+                    // Aplica cores apenas uma vez quando encontrar as barras
+                    applyColors();
+                }
+            };
+            
+            // Inicia as tentativas após um pequeno delay
+            setTimeout(function() {
+                applyColorsWithRetry(1);
+            }, 500);
+            
+            // SOLUÇÃO MELHORADA: Criar cabeçalho fixo usando position: sticky
+            // Abordagem robusta: clonar SVG e usar viewBox + overflow para mostrar apenas cabeçalho
+            let stickyHeaderElement = null;
+            let scrollSyncHandler = null;
+            
+            const setupStickyHeader = function() {
+                console.log('[setupStickyHeader] Iniciando criação do cabeçalho fixo...');
+                
+                // Remove cabeçalho anterior se existir
+                if (stickyHeaderElement) {
+                    console.log('[setupStickyHeader] Removendo cabeçalho anterior...');
+                    if (scrollSyncHandler) {
+                        const ganttWrapper = document.getElementById('gantt-wrapper');
+                        if (ganttWrapper) {
+                            ganttWrapper.removeEventListener('scroll', scrollSyncHandler);
+                        }
+                    }
+                    stickyHeaderElement.remove();
+                    stickyHeaderElement = null;
+                    scrollSyncHandler = null;
+                }
+                
+                const container = document.getElementById('gantt-container');
+                if (!container) {
+                    console.warn('[setupStickyHeader] ❌ Container não encontrado');
+                    return false;
+                }
+                
+                const svg = container.querySelector('svg');
+                if (!svg) {
+                    console.warn('[setupStickyHeader] ❌ SVG não encontrado no container');
+                    console.log('[setupStickyHeader] Container:', container);
+                    console.log('[setupStickyHeader] Elementos no container:', container.children);
+                    return false;
+                }
+                console.log('[setupStickyHeader] ✓ SVG encontrado');
+                
+                // Detecta altura do cabeçalho dinamicamente (pode variar por view mode)
+                const headerHeight = ganttConfig.header_height || 50;
+                console.log('[setupStickyHeader] Altura do cabeçalho configurada:', headerHeight);
+                
+                const ganttWrapper = document.getElementById('gantt-wrapper');
+                if (!ganttWrapper) {
+                    console.warn('[setupStickyHeader] ❌ gantt-wrapper não encontrado');
+                    return false;
+                }
+                console.log('[setupStickyHeader] ✓ gantt-wrapper encontrado');
+                
+                const svgParent = svg.parentElement;
+                // O frappe-gantt cria um elemento com classe 'gantt-container', não necessariamente com ID
+                // Verifica se o parent existe
+                if (!svgParent) {
+                    console.warn('[setupStickyHeader] ❌ Parent do SVG não encontrado');
+                    return false;
+                }
+                
+                // Verifica se é o container correto (pode ter classe ou ID)
+                const hasContainerId = svgParent.id === 'gantt-container';
+                const hasContainerClass = svgParent.classList && svgParent.classList.contains('gantt-container');
+                
+                if (!hasContainerId && !hasContainerClass) {
+                    console.warn('[setupStickyHeader] ⚠ Parent não tem ID nem classe gantt-container');
+                    console.log('[setupStickyHeader] Parent ID:', svgParent.id, 'Classes:', svgParent.className);
+                    // Continua mesmo assim, pois o parent existe e pode ser válido
+                }
+                
+                console.log('[setupStickyHeader] ✓ Container do SVG encontrado (ID:', hasContainerId, 'Class:', hasContainerClass + ')');
+                
+                // Verifica se o SVG tem conteúdo válido
+                const svgWidth = parseFloat(svg.getAttribute('width') || svg.getBoundingClientRect().width || 0);
+                const svgHeight = parseFloat(svg.getAttribute('height') || svg.getBoundingClientRect().height || 0);
+                console.log('[setupStickyHeader] Dimensões do SVG - width:', svgWidth, 'height:', svgHeight);
+                
+                if (svgWidth === 0 || svgHeight === 0) {
+                    console.warn('[setupStickyHeader] ❌ SVG sem dimensões válidas');
+                    return false;
+                }
+                console.log('[setupStickyHeader] ✓ SVG tem dimensões válidas');
+                
+                // IMPORTANTE: O cabeçalho sticky precisa estar dentro do elemento com scroll (#gantt-wrapper)
+                // não dentro do container, para que o position: sticky funcione corretamente
+                // Cria elemento sticky que contém apenas o cabeçalho
+                stickyHeaderElement = document.createElement('div');
+                stickyHeaderElement.id = 'gantt-sticky-header';
+                stickyHeaderElement.className = 'gantt-sticky-header';
+                
+                // Verifica se o svgParent é filho direto do ganttWrapper
+                // Se não for, insere no início do wrapper
+                if (svgParent && svgParent.parentElement === ganttWrapper) {
+                    // Insere no wrapper (elemento com scroll), antes do container
+                    ganttWrapper.insertBefore(stickyHeaderElement, svgParent);
+                    console.log('[setupStickyHeader] Cabeçalho inserido antes do container');
+                } else {
+                    // Se o container não for filho direto, insere no início do wrapper
+                    if (ganttWrapper.firstChild) {
+                        ganttWrapper.insertBefore(stickyHeaderElement, ganttWrapper.firstChild);
+                    } else {
+                        ganttWrapper.appendChild(stickyHeaderElement);
+                    }
+                    console.log('[setupStickyHeader] Cabeçalho inserido no início do wrapper (container não é filho direto)');
+                    console.log('[setupStickyHeader] Estrutura: wrapper ->', ganttWrapper.children.length, 'filhos');
+                }
+                
+                // Clona SVG completo
+                const headerSVG = svg.cloneNode(true);
+                
+                // Salva o viewBox original para referência
+                const originalViewBoxStr = svg.getAttribute('viewBox') || '';
+                let originalViewBoxParts = null;
+                if (originalViewBoxStr) {
+                    originalViewBoxParts = originalViewBoxStr.split(' ').map(parseFloat);
+                }
+                
+                // Ajusta viewBox inicial para mostrar apenas cabeçalho
+                // CRÍTICO: Textos estão em Y=55 (upper-text: meses) e Y=80 (lower-text: datas)
+                // Textos tem ~20px de altura, então precisamos de espaço até Y=105 no mínimo
+                if (originalViewBoxParts && originalViewBoxParts.length === 4) {
+                    // viewBox: x y width height
+                    // Começa em Y=0 e vai até Y=110 (textos em 55 e 80, fim em ~100, margem até 110)
+                    // IMPORTANTE: Não usar 'slice' no preserveAspectRatio para não cortar
+                    headerSVG.setAttribute('viewBox', originalViewBoxParts[0] + ' 0 ' + originalViewBoxParts[2] + ' 110');
+                } else {
+                    // Se não houver viewBox, cria um baseado nas dimensões
+                    headerSVG.setAttribute('viewBox', '0 0 ' + svgWidth + ' 110');
+                    originalViewBoxParts = [0, 0, svgWidth, svgHeight];
+                }
+                
+                // Configura dimensões e estilos do SVG clonado
+                // IMPORTANTE: Usa 'none' para manter exatamente as coordenadas sem escala
+                headerSVG.setAttribute('height', '110');
+                headerSVG.setAttribute('width', svgWidth || '100%');
+                // O SVG clonado deve ter a mesma largura do original para alinhamento perfeito
+                headerSVG.style.width = svgWidth + 'px';
+                headerSVG.style.height = '110px';
+                headerSVG.style.display = 'block';
+                headerSVG.style.overflow = 'visible'; // MUDADO: visible para não cortar textos
+                headerSVG.style.pointerEvents = 'none'; // Evita interações no cabeçalho clonado
+                // CRÍTICO: 'none' garante que o SVG não seja escalado, mantendo coordenadas originais
+                headerSVG.setAttribute('preserveAspectRatio', 'none');
+                
+                stickyHeaderElement.appendChild(headerSVG);
+                
+                // Oculta o cabeçalho original no SVG para evitar duplicação
+                // Usa a função global para garantir que seja reutilizável
+                if (typeof window.hideGanttOriginalHeader === 'function') {
+                    window.hideGanttOriginalHeader(svg, headerHeight);
+                }
+                
+                // Debug: verifica se o elemento foi criado corretamente
+                console.log('Cabeçalho fixo criado:', {
+                    element: stickyHeaderElement,
+                    parent: stickyHeaderElement.parentElement?.id,
+                    position: window.getComputedStyle(stickyHeaderElement).position,
+                    zIndex: window.getComputedStyle(stickyHeaderElement).zIndex,
+                    top: window.getComputedStyle(stickyHeaderElement).top,
+                    visible: window.getComputedStyle(stickyHeaderElement).visibility
+                });
+                
+                // Sincroniza scroll horizontal: move o SVG clonado usando translateX
+                // Abordagem mais simples e confiável que ajustar viewBox
+                let scrollSyncRaf = null;
+                let lastScrollLeft = 0;
+                
+                // Função para sincronizar o cabeçalho com o scroll horizontal
+                // Aceita scrollLeft como parâmetro para usar o valor exato do evento
+                const updateHeaderPosition = function(scrollLeft) {
+                    if (stickyHeaderElement && headerSVG) {
+                        // Se não foi passado scrollLeft, tenta detectar automaticamente
+                        if (scrollLeft === undefined) {
+                            scrollLeft = container.scrollLeft;
+                        }
+                        
+                        // Move o SVG do cabeçalho usando translateX
+                        // Negativo porque quando scrollamos para a direita, o conteúdo deve mover para a esquerda
+                        // IMPORTANTE: Usa transform 3D para melhor performance
+                        headerSVG.style.transform = 'translate3d(' + (-scrollLeft) + 'px, 0, 0)';
+                        headerSVG.style.webkitTransform = 'translate3d(' + (-scrollLeft) + 'px, 0, 0)';
+                        
+                        // Debug quando há mudança no scroll
+                        if (scrollLeft !== lastScrollLeft) {
+                            console.log('[updateHeaderPosition] scrollLeft mudou:', lastScrollLeft, '->', scrollLeft, 'translate3d:', -scrollLeft + 'px, 0, 0');
+                            lastScrollLeft = scrollLeft;
+                        }
+                    }
+                };
+                
+                scrollSyncHandler = function(event) {
+                    console.log('[scrollSyncHandler] Evento de scroll detectado!', event.target.id || event.target.className, 'scrollLeft:', event.target.scrollLeft);
+                    if (scrollSyncRaf) {
+                        cancelAnimationFrame(scrollSyncRaf);
+                    }
+                    // CRÍTICO: Passa o scrollLeft do elemento que está realmente scrollando
+                    const scrollLeft = event.target.scrollLeft;
+                    scrollSyncRaf = requestAnimationFrame(function() {
+                        updateHeaderPosition(scrollLeft);
+                    });
+                };
+                
+                // Adiciona listener de scroll no wrapper
+                console.log('[setupStickyHeader] Adicionando listener no gantt-wrapper...');
+                ganttWrapper.addEventListener('scroll', scrollSyncHandler, { passive: true });
+                
+                // Também verifica se há scroll no container (caso o frappe-gantt use scroll interno)
+                if (container && container !== ganttWrapper) {
+                    console.log('[setupStickyHeader] Adicionando listener no gantt-container...');
+                    container.addEventListener('scroll', scrollSyncHandler, { passive: true });
+                }
+                
+                // IMPORTANTE: Busca TODOS os elementos que podem ter scroll dentro do wrapper
+                const allScrollableElements = ganttWrapper.querySelectorAll('*');
+                let scrollableFound = [];
+                allScrollableElements.forEach(function(el) {
+                    if (el.scrollWidth > el.clientWidth || el.scrollHeight > el.clientHeight) {
+                        scrollableFound.push({
+                            tag: el.tagName,
+                            id: el.id,
+                            class: el.className,
+                            scrollWidth: el.scrollWidth,
+                            clientWidth: el.clientWidth,
+                            hasHorizontalScroll: el.scrollWidth > el.clientWidth
+                        });
+                        
+                        // Adiciona listener neste elemento também
+                        if (el !== ganttWrapper && el !== container) {
+                            el.addEventListener('scroll', scrollSyncHandler, { passive: true });
+                            console.log('[setupStickyHeader] Listener adicionado em elemento scrollable:', el.tagName, el.id, el.className);
+                        }
+                    }
+                });
+                
+                console.log('[setupStickyHeader] Elementos scrollable encontrados:', scrollableFound);
+                
+                // Sincronização inicial (scrollLeft = 0)
+                updateHeaderPosition();
+                
+                console.log('[setupStickyHeader] Listener de scroll horizontal adicionado (usando translateX)');
+                console.log('[setupStickyHeader] Largura SVG:', svgWidth, 'px');
+                console.log('[setupStickyHeader] ganttWrapper scroll info:', {
+                    scrollWidth: ganttWrapper.scrollWidth,
+                    clientWidth: ganttWrapper.clientWidth,
+                    scrollLeft: ganttWrapper.scrollLeft,
+                    hasHorizontalScroll: ganttWrapper.scrollWidth > ganttWrapper.clientWidth
+                });
+                
+                // Garante que o cabeçalho tenha a mesma largura que o SVG para alinhamento correto
+                // IMPORTANTE: O SVG clonado precisa ter a largura TOTAL para que translateX funcione
+                // O container sticky controla o que é visível através do overflow
+                const syncWidth = function() {
+                    if (stickyHeaderElement && headerSVG && svg) {
+                        const svgWidth = parseFloat(svg.getAttribute('width') || svg.getBoundingClientRect().width || 0);
+                        
+                        if (svgWidth > 0) {
+                            // O SVG clonado deve ter a mesma largura do SVG original
+                            headerSVG.setAttribute('width', svgWidth);
+                            headerSVG.style.width = svgWidth + 'px';
+                            
+                            // O container do cabeçalho deve ter 100% da largura do wrapper (área visível)
+                            // Mas o SVG dentro dele tem a largura total e será movido via translateX
+                            stickyHeaderElement.style.width = '100%';
+                            stickyHeaderElement.style.minWidth = 'auto';
+                            stickyHeaderElement.style.maxWidth = 'none';
+                            
+                            console.log('[setupStickyHeader] Largura sincronizada - SVG:', svgWidth + 'px, Header: 100% do wrapper');
+                        }
+                    }
+                };
+                
+                // Sincroniza largura inicial e após mudanças
+                // Usa múltiplas tentativas para garantir que o SVG tenha dimensões válidas
+                const trySyncWidth = function(attempt) {
+                    attempt = attempt || 1;
+                    const svgWidth = parseFloat(svg.getAttribute('width') || svg.getBoundingClientRect().width || 0);
+                    if (svgWidth > 0) {
+                        syncWidth();
+                    } else if (attempt < 5) {
+                        setTimeout(function() {
+                            trySyncWidth(attempt + 1);
+                        }, 200 * attempt);
+                    }
+                };
+                
+                trySyncWidth(1);
+                window.addEventListener('resize', function() {
+                    setTimeout(syncWidth, 100);
+                }, { passive: true });
+                
+                // Verifica se o cabeçalho está visível e funcionando após um delay
+                setTimeout(function() {
+                    const rect = stickyHeaderElement.getBoundingClientRect();
+                    const wrapperRect = ganttWrapper.getBoundingClientRect();
+                    const scrollTop = ganttWrapper.scrollTop;
+                    
+                    console.log('[setupStickyHeader] Verificação do cabeçalho após 1s:', {
+                        headerTop: rect.top,
+                        wrapperTop: wrapperRect.top,
+                        scrollTop: scrollTop,
+                        headerVisible: rect.height > 0 && rect.width > 0,
+                        headerInView: rect.top >= wrapperRect.top && rect.top < wrapperRect.bottom,
+                        position: window.getComputedStyle(stickyHeaderElement).position
+                    });
+                    
+                    // Se o sticky não estiver funcionando (cabeçalho não está no topo quando há scroll),
+                    // usa fallback com JavaScript
+                    if (scrollTop > 10 && rect.top > wrapperRect.top + 5) {
+                        console.warn('[setupStickyHeader] Sticky não está funcionando, usando fallback JavaScript');
+                        // Fallback: usa position: fixed com JavaScript
+                        stickyHeaderElement.style.position = 'fixed';
+                        stickyHeaderElement.style.top = wrapperRect.top + 'px';
+                        stickyHeaderElement.style.left = wrapperRect.left + 'px';
+                        stickyHeaderElement.style.width = wrapperRect.width + 'px';
+                        
+                        // Atualiza posição quando o wrapper scrolla ou a janela é redimensionada
+                        const updateFixedPosition = function() {
+                            const newWrapperRect = ganttWrapper.getBoundingClientRect();
+                            stickyHeaderElement.style.top = newWrapperRect.top + 'px';
+                            stickyHeaderElement.style.left = newWrapperRect.left + 'px';
+                            stickyHeaderElement.style.width = newWrapperRect.width + 'px';
+                        };
+                        
+                        ganttWrapper.addEventListener('scroll', updateFixedPosition, { passive: true });
+                        window.addEventListener('scroll', updateFixedPosition, { passive: true });
+                        window.addEventListener('resize', updateFixedPosition, { passive: true });
+                        
+                        console.log('[setupStickyHeader] Fallback JavaScript ativado');
+                    } else {
+                        console.log('[setupStickyHeader] ✓ Sticky está funcionando corretamente');
+                    }
+                }, 1000);
+                
+                console.log('[setupStickyHeader] ✓ Cabeçalho fixo criado com sucesso (altura:', headerHeight + 'px)');
+                console.log('[setupStickyHeader] Elemento criado:', stickyHeaderElement);
+                console.log('[setupStickyHeader] Estilos aplicados:', {
+                    position: window.getComputedStyle(stickyHeaderElement).position,
+                    top: window.getComputedStyle(stickyHeaderElement).top,
+                    zIndex: window.getComputedStyle(stickyHeaderElement).zIndex,
+                    display: window.getComputedStyle(stickyHeaderElement).display,
+                    visibility: window.getComputedStyle(stickyHeaderElement).visibility
+                });
+                return true;
+            };
+            
+            // Tenta criar o cabeçalho fixo após renderização inicial
+            // Usa múltiplas tentativas para garantir que o SVG está completamente renderizado
+            const trySetupStickyHeader = function(attempt) {
+                attempt = attempt || 1;
+                const maxAttempts = 10; // Aumentado para 10 tentativas
+                
+                console.log('Tentativa', attempt, 'de criar cabeçalho fixo...');
+                
+                const result = setupStickyHeader();
+                if (result) {
+                    console.log('✓ Cabeçalho fixo criado com sucesso na tentativa', attempt);
+                } else {
+                    console.warn('✗ Falha ao criar cabeçalho fixo na tentativa', attempt);
+                    if (attempt < maxAttempts) {
+                        // Tenta novamente após um delay maior a cada tentativa
+                        const delay = 300 * attempt; // Delay progressivo
+                        console.log('Tentando novamente em', delay, 'ms...');
+                        setTimeout(function() {
+                            trySetupStickyHeader(attempt + 1);
+                        }, delay);
+                    } else {
+                        console.error('❌ Não foi possível criar cabeçalho fixo após', maxAttempts, 'tentativas');
+                        // Tenta uma última vez após um delay maior
+                        setTimeout(function() {
+                            console.log('Tentativa final de criar cabeçalho fixo...');
+                            setupStickyHeader();
+                        }, 2000);
+                    }
+                }
+            };
+            
+            // Primeira tentativa após 500ms (reduzido para começar mais cedo)
+            setTimeout(function() {
+                console.log('Iniciando tentativas de criar cabeçalho fixo...');
+                trySetupStickyHeader(1);
+            }, 500);
+            
+            // Função global para ocultar o cabeçalho original do Gantt (reutilizável)
+            window.hideGanttOriginalHeader = function(targetSvg, headerHeight) {
+                if (!targetSvg) {
+                    const container = document.getElementById('gantt-container');
+                    if (container) {
+                        targetSvg = container.querySelector('svg');
+                    }
+                }
+                if (!targetSvg) return;
+                
+                if (!headerHeight) {
+                    headerHeight = ganttConfig.header_height || 100;
+                }
+                
+                // 1. Tenta encontrar o grupo <g class="date"> diretamente
+                const dateGroup = targetSvg.querySelector('g.date');
+                if (dateGroup && dateGroup.style.display !== 'none') {
+                    console.log('[hideGanttOriginalHeader] ✓ Encontrado <g class="date"> - ocultando...');
+                    dateGroup.style.display = 'none';
+                    dateGroup.setAttribute('data-hidden-by-sticky', 'true');
+                } else {
+                    // 2. Se não encontrar, procura pelo segundo <g> dentro do SVG
+                    const allGroups = Array.from(targetSvg.querySelectorAll('g'));
+                    if (allGroups.length >= 2) {
+                        const secondGroup = allGroups[1]; // g[2] = índice 1
+                        // Verifica se é o cabeçalho (contém textos com Y < headerHeight)
+                        const hasHeaderTexts = Array.from(secondGroup.querySelectorAll('text')).some(function(text) {
+                            const y = parseFloat(text.getAttribute('y') || '9999');
+                            return y >= 0 && y < headerHeight;
+                        });
+                        
+                        if (hasHeaderTexts && secondGroup.style.display !== 'none') {
+                            console.log('[hideGanttOriginalHeader] ✓ Encontrado cabeçalho no segundo <g> - ocultando...');
+                            secondGroup.style.display = 'none';
+                            secondGroup.setAttribute('data-hidden-by-sticky', 'true');
+                        }
+                    }
+                }
+                
+                // 3. Ocultar também outros elementos do cabeçalho (linhas, retângulos) que possam estar soltos
+                Array.from(targetSvg.querySelectorAll('*')).forEach(function(el) {
+                    // Pula se já foi ocultado ou se é um grupo de barras
+                    if (el.hasAttribute('data-hidden-by-sticky') || el.closest('g.bar-wrapper')) {
+                        return;
+                    }
+                    
+                    const y = parseFloat(el.getAttribute('y') || '9999');
+                    // Oculta elementos que estão na área do cabeçalho
+                    if (y >= 0 && y < headerHeight) {
+                        // Verifica se não é uma barra de progresso
+                        const height = parseFloat(el.getAttribute('height') || '0');
+                        const isBar = height > 8 && height < 60;
+                        
+                        // Ocultar linhas, retângulos e outros elementos do cabeçalho
+                        if (!isBar && (el.tagName === 'line' || el.tagName === 'rect' || el.tagName === 'text')) {
+                            el.style.display = 'none';
+                            el.setAttribute('data-hidden-by-sticky', 'true');
+                        }
+                    }
+                });
+            };
+            
+            // FASE 3: INTERCEPTAR RE-RENDERIZAÇÕES DO FRAPPE-GANTT
+            // Intercepta mudanças de view mode do frappe-gantt para garantir reaplicação de cores
+            // FASE 6: Também recria cabeçalho fixo quando view_mode mudar
+            if (gantt && typeof gantt.change_view_mode === 'function') {
+                const originalChangeViewMode = gantt.change_view_mode;
+                gantt.change_view_mode = function(mode) {
+                    console.log('change_view_mode chamado com modo:', mode);
+                    const result = originalChangeViewMode.call(this, mode);
+                    
+                    // Recria cabeçalho fixo após mudança de view mode
+                    // Aguarda renderização completa do SVG antes de recriar
+                    setTimeout(function() {
+                        console.log('[change_view_mode] Recriando cabeçalho fixo após mudança para:', mode);
+                        const result = setupStickyHeader();
+                        if (!result) {
+                            console.warn('[change_view_mode] Falha ao recriar cabeçalho, tentando novamente...');
+                            setTimeout(function() {
+                                setupStickyHeader();
+                            }, 500);
+                        }
+                    }, 300);
+                    
+                    // Recriação adicional após mais tempo (caso o SVG demore mais para renderizar)
+                    setTimeout(function() {
+                        console.log('[change_view_mode] Segunda tentativa de recriar cabeçalho fixo...');
+                        setupStickyHeader();
+                    }, 800);
+                    
+                    // Terceira tentativa após ainda mais tempo
+                    setTimeout(function() {
+                        console.log('[change_view_mode] Terceira tentativa de recriar cabeçalho fixo...');
+                        setupStickyHeader();
+                    }, 1500);
+                    
+                    // Reaplica cores após mudança de view mode
+                    // Usa múltiplos timeouts para garantir que o SVG foi completamente re-renderizado
+                    setTimeout(function() {
+                        if (typeof window.applyGanttColors === 'function') {
+                            console.log('Reaplicando cores após mudança de view mode para:', mode);
+                            window.applyGanttColors();
+                        }
+                    }, 300);
+                    
+                    // Reaplicação adicional após mais tempo (caso o SVG demore mais para renderizar)
+                    setTimeout(function() {
+                        if (typeof window.applyGanttColors === 'function') {
+                            window.applyGanttColors();
+                        }
+                    }, 800);
+                    
+                    
+                    return result;
+                };
+                console.log('Interceptação de change_view_mode configurada');
+            }
+            
+            // Adiciona MutationObserver para reaplicar cores quando o SVG for modificado
+            // IMPORTANTE: Configurado para ignorar mudanças que nós mesmos causamos
+            const containerForObserver = document.getElementById('gantt-container');
+            if (containerForObserver) {
+                let observerTimeout = null;
+                
+                const observer = new MutationObserver(function(mutations) {
+                    // Ignora se estamos aplicando cores (evita loop infinito)
+                    if (isApplyingColors) {
+                        return;
+                    }
+                    
+                    // FASE 3: LOGS DETALHADOS DE MUDANÇAS NO DOM
+                    let relevantMutations = [];
+                    let shouldReapply = false;
+                    
+                    mutations.forEach(function(mutation) {
+                        const target = mutation.target;
+                        const isRect = target.tagName === 'rect';
+                        const isGroup = target.tagName === 'g';
+                        const isSVG = target.tagName === 'SVG';
+                        
+                        // Loga mudanças relevantes
+                        if (mutation.type === 'attributes') {
+                            const attrName = mutation.attributeName;
+                            
+                            // Se é mudança em fill, stroke, style ou data-item-id
+                            if (attrName === 'fill' || attrName === 'stroke' || attrName === 'style' || attrName === 'data-item-id') {
+                                const hasDataItemId = target.hasAttribute && target.hasAttribute('data-item-id');
+                                const hasDataCustomColor = target.hasAttribute && target.hasAttribute('data-custom-color');
+                                
+                                // Se não tem nossos marcadores, pode ser re-renderização do frappe-gantt
+                                if (!hasDataItemId && !hasDataCustomColor) {
+                                    shouldReapply = true;
+                                    relevantMutations.push({
+                                        type: 'attribute',
+                                        target: isRect ? 'rect' : (isGroup ? 'g' : target.tagName),
+                                        attribute: attrName,
+                                        hasDataItemId: hasDataItemId,
+                                        hasDataCustomColor: hasDataCustomColor
+                                    });
+                                } else if (attrName === 'data-item-id' || attrName === 'fill' || attrName === 'stroke') {
+                                    // Se nossos atributos estão sendo removidos, é problema!
+                                    relevantMutations.push({
+                                        type: 'attribute_removed',
+                                        target: isRect ? 'rect' : (isGroup ? 'g' : target.tagName),
+                                        attribute: attrName,
+                                        oldValue: mutation.oldValue
+                                    });
+                                    shouldReapply = true;
+                                }
+                            }
+                        }
+                        
+                        // Mudanças na estrutura (childList) são sempre relevantes
+                        if (mutation.type === 'childList') {
+                            const addedNodes = mutation.addedNodes.length;
+                            const removedNodes = mutation.removedNodes.length;
+                            
+                            if (addedNodes > 0 || removedNodes > 0) {
+                                shouldReapply = true;
+                                relevantMutations.push({
+                                    type: 'structure',
+                                    target: isSVG ? 'SVG' : (isGroup ? 'g' : target.tagName),
+                                    added: addedNodes,
+                                    removed: removedNodes
+                                });
+                            }
+                        }
+                    });
+                    
+                    // Loga mudanças relevantes (apenas primeiras 5 para não poluir)
+                    if (relevantMutations.length > 0 && relevantMutations.length <= 5) {
+                        console.log('=== MUTATIONOBSERVER: Mudanças detectadas ===');
+                        relevantMutations.forEach(function(mut, idx) {
+                            console.log(`  Mutação ${idx + 1}:`, mut);
+                        });
+                    }
+                    
+                    if (shouldReapply) {
+                        // Debounce: cancela timeout anterior e cria novo
+                        if (observerTimeout) {
+                            clearTimeout(observerTimeout);
+                        }
+                        
+                        // Aguarda um pouco antes de reaplicar para evitar loops e agrupar múltiplas mudanças
+                        observerTimeout = setTimeout(function() {
+                            // Verifica novamente se não estamos aplicando cores
+                            if (isApplyingColors) {
+                                return;
+                            }
+                            
+                            // Aplica cores apenas se não estiver em execução
+                            if (!isApplyingColors && typeof window.applyGanttColors === 'function') {
+                                window.applyGanttColors();
+                            }
+                            
+                            // IMPORTANTE: Garante que o cabeçalho original continue oculto após mudanças no SVG
+                            if (typeof window.hideGanttOriginalHeader === 'function') {
+                                window.hideGanttOriginalHeader(null, ganttConfig.header_height || 100);
+                            }
+                        }, 500); // Aumentado para 500ms para evitar reaplicações muito frequentes
+                    }
+                });
+                
+                // Observa mudanças no container, mas apenas em childList (estrutura)
+                // Não observa attributes para evitar detectar nossas próprias mudanças
+                observer.observe(containerForObserver, {
+                    childList: true,
+                    subtree: true,
+                    attributes: false // Desabilitado para evitar loop - só detectamos mudanças estruturais
+                });
+                
+                console.log('MutationObserver configurado (apenas mudanças estruturais)');
+            }
+            
+            // FASE 3: VERIFICAÇÃO PERIÓDICA SE CORES AINDA ESTÃO APLICADAS
+            // Verifica periodicamente se as cores foram removidas e as reaplica se necessário
+            let colorCheckInterval = null;
+            let lastColorCheck = 0;
+            
+            const checkColorsPeriodically = function() {
+                const now = Date.now();
+                // Verifica a cada 2 segundos
+                if (now - lastColorCheck < 2000) {
+                    return;
+                }
+                lastColorCheck = now;
+                
+                // Não verifica se está aplicando cores
+                if (isApplyingColors) {
+                    return;
+                }
+                
+                const svg = container.querySelector('svg');
+                if (!svg) return;
+                
+                // Verifica alguns itens aleatórios para ver se cores ainda estão aplicadas
+                let missingColors = 0;
+                let checkedItems = 0;
+                
+                // Verifica primeiros 20 itens
+                // CORREÇÃO: Define colors localmente se não estiver no escopo
+                const localColors = {
+                    'gantt-project': { fill: '#1a73e8', stroke: '#1a73e8', strokeWidth: '2' },
+                    'gantt-macro': { fill: '#34a853', stroke: '#34a853', strokeWidth: '1.5' },
+                    'gantt-stage': { fill: '#fbbc04', stroke: '#fbbc04', strokeWidth: '1' },
+                    'gantt-task': { fill: '#9aa0a6', stroke: '#9aa0a6', strokeWidth: '0.5' }
+                };
+                
+                timelineData.slice(0, 20).forEach(function(item) {
+                    if (!item || !item.custom_class) return;
+                    
+                    const itemColors = localColors[item.custom_class];
+                    if (!itemColors) return;
+                    
+                    // Encontra barras com data-item-id
+                    const bars = svg.querySelectorAll('rect[data-item-id="' + item.id + '"]');
+                    
+                    if (bars.length > 0) {
+                        checkedItems++;
+                        bars.forEach(function(bar) {
+                            const computedFill = window.getComputedStyle(bar).fill;
+                            const attrFill = bar.getAttribute('fill') || '';
+                            
+                            // Verifica se a cor está correta
+                            const fillMatches = attrFill === itemColors.fill || 
+                                               computedFill === itemColors.fill ||
+                                               (computedFill.startsWith('rgb') && computedFill.includes('26') && computedFill.includes('115') && computedFill.includes('232')); // RGB de #1a73e8
+                            
+                            if (!fillMatches && computedFill !== 'none' && computedFill !== '' && computedFill !== 'transparent') {
+                                missingColors++;
+                                if (missingColors <= 3) {
+                                    console.warn('⚠ Verificação periódica: Cor perdida para', item.name.trim(), '- Reaplicando...');
+                                }
+                            }
+                        });
+                    }
+                });
+                
+                // Se encontrou cores faltando, reaplica
+                if (missingColors > 0 && checkedItems > 0) {
+                    console.warn('⚠ Verificação periódica:', missingColors, 'barras com cores incorretas de', checkedItems, 'verificadas - Reaplicando cores...');
+                    if (typeof window.applyGanttColors === 'function') {
+                        window.applyGanttColors();
+                    }
+                }
+            };
+            
+            // Inicia verificação periódica após 3 segundos
+            setTimeout(function() {
+                colorCheckInterval = setInterval(checkColorsPeriodically, 2000);
+                console.log('Verificação periódica de cores iniciada (a cada 2 segundos)');
+            }, 3000);
+            
+            
+            // Atualiza o callback de clique para usar o mapa de metadados
+            if (gantt && gantt.change_view_mode) {
+                // O callback on_click já foi definido, mas vamos garantir que funciona
+                console.log('Callbacks configurados');
+            }
+        } catch (error) {
+            console.error('Erro ao inicializar Gantt:', error);
+            console.error('Tipo do erro:', error.constructor.name);
+            console.error('Stack completo:', error.stack);
+            console.error('Dados originais (primeiros 5):', timelineData ? timelineData.slice(0, 5) : 'N/A');
+            
+            let errorMessage = 'Erro ao renderizar o gráfico Gantt: ' + (error.message || 'Erro desconhecido');
+            if (error.stack) {
+                errorMessage += '<br><small style="color: #666;">Detalhes técnicos: ' + error.stack.split('\n')[0] + '</small>';
+            }
+            
+            container.innerHTML = '<div style="padding: 20px; text-align: center; color: #d00; background-color: #ffe5e5; border: 1px solid #d00; border-radius: 4px;">' +
+                '<p style="margin: 0 0 10px 0;"><strong>' + errorMessage + '</strong></p>' +
+                '<p style="margin: 0; font-size: 0.9rem;">Verifique o console do navegador (F12) para mais detalhes.</p>' +
+                '</div>';
+        }
+    } else {
+        // Se não houver dados, mostra mensagem
+        console.log('Nenhum dado disponível');
+        container.innerHTML = '<p style="padding: 20px; text-align: center; color: #666;">Nenhum dado disponível para exibir no cronograma. Verifique se há projetos com datas válidas (start_date e end_date) no banco de dados.</p>';
+    }
+});
+</script>
+
+<style>
+/* Estilos customizados para o Gantt */
+#gantt-container {
+    width: 100%;
+    background-color: #fff;
+    /* Removido border, border-radius e padding para não interferir no sticky */
+    /* border: 1px solid #ddd; */
+    /* border-radius: 4px; */
+    /* padding: 10px; */
+}
+
+/* Garantir que o SVG seja visível */
+#gantt-container svg {
+    display: block !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+}
+
+/* SOLUÇÃO SIMPLIFICADA: CSS para cabeçalho fixo */
+#gantt-wrapper {
+    position: relative;
+    overflow-y: auto;
+    overflow-x: auto;
+    max-height: 800px;
+    background-color: #fff;
+    /* Garante que o sticky funcione - não pode ter overflow: hidden no pai */
+    display: block;
+}
+
+#gantt-container {
+    position: relative;
+}
+
+/* Cabeçalho fixo usando position: sticky */
+.gantt-sticky-header {
+    position: -webkit-sticky !important; /* Safari */
+    position: sticky !important;
+    top: 0 !important;
+    left: 0 !important;
+    z-index: 1000 !important;
+    background: white !important;
+    height: 115px !important; /* 110px do SVG + 5px margem */
+    overflow: hidden !important;
+    border-bottom: 2px solid #ccc !important;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1) !important;
+    transition: box-shadow 0.2s ease;
+    will-change: scroll-position;
+    /* A largura será definida dinamicamente via JavaScript para corresponder ao SVG total */
+    margin: 0 !important;
+    padding: 0 !important; /* Sem padding para não interferir */
+    display: block !important;
+    visibility: visible !important;
+    /* Garante que o cabeçalho não quebre o layout */
+    box-sizing: border-box;
+}
+
+/* Garante que o SVG dentro do cabeçalho seja exibido corretamente */
+.gantt-sticky-header svg {
+    display: block !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    visibility: visible !important;
+    overflow: visible !important; /* Não corta conteúdo */
+    /* O SVG será movido via translate3d para sincronizar com o scroll horizontal */
+    will-change: transform !important;
+    backface-visibility: hidden !important; /* Otimiza performance de transform */
+    -webkit-backface-visibility: hidden !important;
+}
+
+/* Ajustes para responsividade */
+@media (max-width: 768px) {
+    #gantt-container {
+        overflow-x: scroll;
+    }
+}
+
+/* Cores por nível hierárquico - fallback via CSS */
+/* Esquema de cores distintas (padrão) */
+#gantt-container.color-scheme-colors svg .bar[data-project],
+#gantt-container.color-scheme-colors svg g[data-task-id^="project-"] .bar {
+    fill: #1a73e8 !important;
+    stroke: #1a73e8 !important;
+    stroke-width: 2px !important;
+}
+
+#gantt-container.color-scheme-colors svg .bar[data-macro],
+#gantt-container.color-scheme-colors svg g[data-task-id^="macro-"] .bar {
+    fill: #34a853 !important;
+    stroke: #34a853 !important;
+    stroke-width: 1.5px !important;
+}
+
+#gantt-container.color-scheme-colors svg .bar[data-stage],
+#gantt-container.color-scheme-colors svg g[data-task-id^="stage-"] .bar {
+    fill: #fbbc04 !important;
+    stroke: #fbbc04 !important;
+    stroke-width: 1px !important;
+}
+
+#gantt-container.color-scheme-colors svg .bar[data-task],
+#gantt-container.color-scheme-colors svg g[data-task-id^="task-"] .bar {
+    fill: #9aa0a6 !important;
+    stroke: #9aa0a6 !important;
+    stroke-width: 0.5px !important;
+}
+
+
+/* Estilos de texto por nível hierárquico */
+.gantt-project {
+    font-weight: bold;
+}
+
+.gantt-macro {
+    font-weight: 500;
+}
+
+.gantt-stage {
+    font-weight: normal;
+}
+
+.gantt-task {
+    font-weight: normal;
+    font-style: italic;
+}
+</style>
+{% endblock %}
+

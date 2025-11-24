@@ -1,0 +1,189 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard de Projetos - Cronograma{% endblock %}
+
+{% block breadcrumbs %}
+    &raquo; Dashboard de Projetos
+{% endblock %}
+
+{% block content %}
+<div class="card">
+    <h2>Dashboard Geral de Projetos</h2>
+    <p class="small-text">Filtre os projetos por múltiplos critérios para encontrar rapidamente o que você precisa.</p>
+</div>
+
+<div class="card">
+    <h3>Filtros</h3>
+    <form method="GET" action="{{ url_for('dashboard_projects') }}">
+        <div class="project-form-fields">
+            <div class="field">
+                <label for="status">Status do projeto</label>
+                <select id="status" name="status" multiple>
+                    {% for status in filter_options.statuses %}
+                        <option value="{{ status }}" {% if status in (current_filters.status if current_filters.status is iterable and current_filters.status is not string else [current_filters.status] if current_filters.status else []) %}selected{% endif %}>
+                            {{ status }}
+                        </option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div class="field">
+                <label for="requesting_agency">Órgão demandante</label>
+                <select id="requesting_agency" name="requesting_agency" multiple>
+                    {% for agency in filter_options.requesting_agencies %}
+                        <option value="{{ agency }}" {% if agency in (current_filters.requesting_agency if current_filters.requesting_agency is iterable and current_filters.requesting_agency is not string else [current_filters.requesting_agency] if current_filters.requesting_agency else []) %}selected{% endif %}>
+                            {{ agency }}
+                        </option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div class="field">
+                <label for="internal_department">Setor interno</label>
+                <select id="internal_department" name="internal_department" multiple>
+                    {% for dept in filter_options.internal_departments %}
+                        <option value="{{ dept }}" {% if dept in (current_filters.internal_department if current_filters.internal_department is iterable and current_filters.internal_department is not string else [current_filters.internal_department] if current_filters.internal_department else []) %}selected{% endif %}>
+                            {{ dept }}
+                        </option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div class="field">
+                <label for="coordinator">Coordenador</label>
+                <select id="coordinator" name="coordinator" multiple>
+                    {% for coord in filter_options.coordinators %}
+                        <option value="{{ coord }}" {% if coord in (current_filters.coordinator if current_filters.coordinator is iterable and current_filters.coordinator is not string else [current_filters.coordinator] if current_filters.coordinator else []) %}selected{% endif %}>
+                            {{ coord }}
+                        </option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div class="field">
+                <label for="automation_support">Equipe Automatiza / Suporte Automatiza</label>
+                <select id="automation_support" name="automation_support" multiple>
+                    {% for support in filter_options.automation_supports %}
+                        <option value="{{ support }}" {% if support in (current_filters.automation_support if current_filters.automation_support is iterable and current_filters.automation_support is not string else [current_filters.automation_support] if current_filters.automation_support else []) %}selected{% endif %}>
+                            {{ support }}
+                        </option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div class="field">
+                <label for="sponsoring_manager">Gestor responsável</label>
+                <select id="sponsoring_manager" name="sponsoring_manager" multiple>
+                    {% for manager in filter_options.sponsoring_managers %}
+                        <option value="{{ manager }}" {% if manager in (current_filters.sponsoring_manager if current_filters.sponsoring_manager is iterable and current_filters.sponsoring_manager is not string else [current_filters.sponsoring_manager] if current_filters.sponsoring_manager else []) %}selected{% endif %}>
+                            {{ manager }}
+                        </option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div class="field">
+                <label for="project_type">Tipo de projeto</label>
+                <select id="project_type" name="project_type" multiple>
+                    <option value="robot" {% if "robot" in (current_filters.project_type if current_filters.project_type is iterable and current_filters.project_type is not string else [current_filters.project_type] if current_filters.project_type else []) %}selected{% endif %}>Robô</option>
+                    <option value="system" {% if "system" in (current_filters.project_type if current_filters.project_type is iterable and current_filters.project_type is not string else [current_filters.project_type] if current_filters.project_type else []) %}selected{% endif %}>Sistema</option>
+                    <option value="both" {% if "both" in (current_filters.project_type if current_filters.project_type is iterable and current_filters.project_type is not string else [current_filters.project_type] if current_filters.project_type else []) %}selected{% endif %}>Robô e Sistema</option>
+                    <option value="none" {% if "none" in (current_filters.project_type if current_filters.project_type is iterable and current_filters.project_type is not string else [current_filters.project_type] if current_filters.project_type else []) %}selected{% endif %}>Nenhum</option>
+                </select>
+            </div>
+
+            <div class="field">
+                <label for="tools">Ferramentas/Sistemas (busca parcial)</label>
+                <input type="text" id="tools" name="tools" value="{{ current_filters.tools }}" placeholder="Ex: Power Automate, SEI, SIAFI...">
+            </div>
+
+            <div class="field">
+                <label for="progress_sort">Ordenar por progresso</label>
+                <select id="progress_sort" name="progress_sort">
+                    <option value="" {% if not current_filters.progress_sort %}selected{% endif %}>Sem ordenação</option>
+                    <option value="desc" {% if current_filters.progress_sort == "desc" %}selected{% endif %}>Maior para menor</option>
+                    <option value="asc" {% if current_filters.progress_sort == "asc" %}selected{% endif %}>Menor para maior</option>
+                </select>
+            </div>
+        </div>
+
+        <div style="margin-top: 16px;">
+            <button type="submit">Filtrar</button>
+            <a href="{{ url_for('dashboard_projects') }}" class="link-button" style="margin-left: 8px;">Limpar filtros</a>
+        </div>
+    </form>
+</div>
+
+<div class="card">
+    <h3>
+        Resultados ({{ projects|length }} projeto{{ 's' if projects|length != 1 else '' }})
+        <a href="{{ url_for('export_dashboard_projects', **request.args) }}" class="link-button" style="margin-left: 16px;">
+            📥 Exportar para Excel
+        </a>
+    </h3>
+    
+    {% if projects %}
+        <div style="overflow-x: auto;">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Nome do projeto</th>
+                        <th>Escopo</th>
+                        <th>Status</th>
+                        <th>Progresso</th>
+                        <th>Link do GitHub</th>
+                        <th>Coordenador</th>
+                        <th>Equipe Automatiza / Suporte Automatiza</th>
+                        <th>Órgão demandante</th>
+                        <th>Setor interno</th>
+                        <th>Gestor responsável</th>
+                        <th>Contato do gestor responsável</th>
+                        <th>Gestor técnico</th>
+                        <th>Contato do gestor técnico</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for item in projects %}
+                        <tr>
+                            <td>
+                                <a href="{{ url_for('project_detail', project_id=item.project.id) }}">{{ item.project.name }}</a>
+                            </td>
+                            <td>{{ item.project.scope or '—' }}</td>
+                            <td>{{ item.status_display or '—' }}</td>
+                            <td>
+                                {% if item.progress is not none %}
+                                    <div class="progress-bar-container">
+                                        <div class="progress-bar-fill" style="width: {{ item.progress }}%;">
+                                            {{ item.progress }}%
+                                        </div>
+                                    </div>
+                                {% else %}
+                                    —
+                                {% endif %}
+                            </td>
+                            <td>
+                                {% if item.project.github_link %}
+                                    <a href="{{ item.project.github_link }}" target="_blank" rel="noopener noreferrer">{{ item.project.github_link }}</a>
+                                {% else %}
+                                    —
+                                {% endif %}
+                            </td>
+                            <td>{{ item.project.coordinator or '—' }}</td>
+                            <td>{{ item.project.automation_support or '—' }}</td>
+                            <td>{{ item.project.requesting_agency or '—' }}</td>
+                            <td>{{ item.project.internal_department or '—' }}</td>
+                            <td>{{ item.project.sponsoring_manager or '—' }}</td>
+                            <td>{{ item.project.sponsoring_manager_contact or '—' }}</td>
+                            <td>{{ item.project.technical_manager or '—' }}</td>
+                            <td>{{ item.project.technical_manager_contact or '—' }}</td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    {% else %}
+        <p>Nenhum projeto encontrado com os filtros aplicados.</p>
+    {% endif %}
+</div>
+{% endblock %}
+

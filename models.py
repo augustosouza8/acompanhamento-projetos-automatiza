@@ -8,7 +8,10 @@ Hierarquia:
                 -> Tarefas (Task)
 """
 
+from typing import Optional
+from datetime import date
 from flask_sqlalchemy import SQLAlchemy
+from sqlalchemy.orm import validates
 
 db = SQLAlchemy()
 
@@ -35,6 +38,9 @@ class Project(db.Model):
     # Metadados adicionais
     scope = db.Column(db.Text, nullable=True)
     status = db.Column(db.String(50), nullable=True)
+    status_manual = db.Column(db.Boolean, nullable=False, default=False)
+    status_manual_value = db.Column(db.String(50), nullable=True)
+    auto_shift_tasks = db.Column(db.Boolean, nullable=False, default=False)
     github_link = db.Column(db.String(255), nullable=True)
     coordinator = db.Column(db.String(255), nullable=True)
     automation_support = db.Column(db.String(255), nullable=True)
@@ -72,7 +78,7 @@ class MacroStage(db.Model):
     __tablename__ = "macrostages"
 
     id = db.Column(db.Integer, primary_key=True)
-    project_id = db.Column(db.Integer, db.ForeignKey("projects.id"), nullable=False)
+    project_id = db.Column(db.Integer, db.ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
     name = db.Column(db.String(255), nullable=False)
     position = db.Column(db.Integer, nullable=False, default=0)
     structure_type = db.Column(db.String(20), nullable=True)
@@ -118,7 +124,7 @@ class Stage(db.Model):
     __tablename__ = "stages"
 
     id = db.Column(db.Integer, primary_key=True)
-    macrostage_id = db.Column(db.Integer, db.ForeignKey("macrostages.id"), nullable=False)
+    macrostage_id = db.Column(db.Integer, db.ForeignKey("macrostages.id", ondelete="CASCADE"), nullable=False)
     name = db.Column(db.String(255), nullable=False)
     position = db.Column(db.Integer, nullable=False, default=0)
     stage_type = db.Column(db.String(20), nullable=True)
@@ -158,8 +164,8 @@ class Task(db.Model):
     __tablename__ = "tasks"
 
     id = db.Column(db.Integer, primary_key=True)
-    stage_id = db.Column(db.Integer, db.ForeignKey("stages.id"), nullable=True)
-    macrostage_id = db.Column(db.Integer, db.ForeignKey("macrostages.id"), nullable=False)
+    stage_id = db.Column(db.Integer, db.ForeignKey("stages.id", ondelete="CASCADE"), nullable=True)
+    macrostage_id = db.Column(db.Integer, db.ForeignKey("macrostages.id", ondelete="CASCADE"), nullable=False)
     name = db.Column(db.String(255), nullable=False)
 
     start_date = db.Column(db.Date, nullable=True)
@@ -180,6 +186,27 @@ class Task(db.Model):
         order_by="WeeklyUpdate.update_date.desc()",
     )
 
+    @validates('start_date', 'end_date')
+    def validate_dates(self, key: str, value: Optional[date]) -> Optional[date]:
+        """
+        Valida que a data de início nunca seja maior que a data de fim.
+        As datas podem ser iguais (coincidir).
+        """
+        if value is None:
+            return value
+        
+        # Se estamos validando start_date, verifica se end_date já está definido
+        if key == 'start_date' and self.end_date is not None:
+            if value > self.end_date:
+                raise ValueError("A data de início não pode ser maior que a data de fim.")
+        
+        # Se estamos validando end_date, verifica se start_date já está definido
+        if key == 'end_date' and self.start_date is not None:
+            if value < self.start_date:
+                raise ValueError("A data de fim não pode ser menor que a data de início.")
+        
+        return value
+
     def __repr__(self) -> str:
         return f"<Task id={self.id} name={self.name!r} stage_id={self.stage_id} macrostage_id={self.macrostage_id}>"
 
@@ -198,7 +225,7 @@ class WeeklyUpdate(db.Model):
     __tablename__ = "weekly_updates"
 
     id = db.Column(db.Integer, primary_key=True)
-    task_id = db.Column(db.Integer, db.ForeignKey("tasks.id"), nullable=False)
+    task_id = db.Column(db.Integer, db.ForeignKey("tasks.id", ondelete="CASCADE"), nullable=False)
     content = db.Column(db.Text, nullable=False)
     update_date = db.Column(db.Date, nullable=True)
 

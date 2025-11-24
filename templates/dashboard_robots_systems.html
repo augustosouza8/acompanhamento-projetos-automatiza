@@ -1,0 +1,142 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard de Robôs e Sistemas - Cronograma{% endblock %}
+
+{% block breadcrumbs %}
+    &raquo; Dashboard de Robôs e Sistemas
+{% endblock %}
+
+{% block content %}
+<div class="card">
+    <h2>Dashboard de Robôs e Sistemas</h2>
+    <p class="small-text">Lista todos os robôs e sistemas cadastrados em todos os projetos, com status calculado baseado nas tarefas associadas.</p>
+</div>
+
+<div class="card">
+    <h3>Filtros</h3>
+    <form method="GET" action="{{ url_for('dashboard_robots_systems') }}">
+        <div class="project-form-fields">
+            <div class="field">
+                <label for="stage_type_filter">Tipo</label>
+                <select id="stage_type_filter" name="stage_type_filter" multiple>
+                    <option value="robô" {% if "robô" in (current_filters.stage_type if current_filters.stage_type is iterable and current_filters.stage_type is not string else [current_filters.stage_type] if current_filters.stage_type else []) %}selected{% endif %}>Robô</option>
+                    <option value="sistema" {% if "sistema" in (current_filters.stage_type if current_filters.stage_type is iterable and current_filters.stage_type is not string else [current_filters.stage_type] if current_filters.stage_type else []) %}selected{% endif %}>Sistema</option>
+                </select>
+            </div>
+
+            <div class="field">
+                <label for="status_filter">Status</label>
+                <select id="status_filter" name="status_filter" multiple>
+                    <option value="A iniciar" {% if "A iniciar" in (current_filters.status if current_filters.status is iterable and current_filters.status is not string else [current_filters.status] if current_filters.status else []) %}selected{% endif %}>A iniciar</option>
+                    <option value="Em andamento" {% if "Em andamento" in (current_filters.status if current_filters.status is iterable and current_filters.status is not string else [current_filters.status] if current_filters.status else []) %}selected{% endif %}>Em andamento</option>
+                    <option value="Concluído" {% if "Concluído" in (current_filters.status if current_filters.status is iterable and current_filters.status is not string else [current_filters.status] if current_filters.status else []) %}selected{% endif %}>Concluído</option>
+                </select>
+            </div>
+
+            <div class="field">
+                <label for="project_id">Projeto</label>
+                <select id="project_id" name="project_id" multiple>
+                    {% for project_id, project_name in filter_options.projects %}
+                        <option value="{{ project_id }}" {% if project_id|string in (current_filters.project_id if current_filters.project_id is iterable and current_filters.project_id is not string else [current_filters.project_id|string] if current_filters.project_id else []) %}selected{% endif %}>
+                            {{ project_name }}
+                        </option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div class="field">
+                <label for="requesting_agency">Órgão demandante</label>
+                <select id="requesting_agency" name="requesting_agency" multiple>
+                    {% for agency in filter_options.requesting_agencies %}
+                        <option value="{{ agency }}" {% if agency in (current_filters.requesting_agency if current_filters.requesting_agency is iterable and current_filters.requesting_agency is not string else [current_filters.requesting_agency] if current_filters.requesting_agency else []) %}selected{% endif %}>
+                            {{ agency }}
+                        </option>
+                    {% endfor %}
+                </select>
+            </div>
+        </div>
+
+        <div style="margin-top: 16px;">
+            <button type="submit">Filtrar</button>
+            <a href="{{ url_for('dashboard_robots_systems') }}" class="link-button" style="margin-left: 8px;">Limpar filtros</a>
+        </div>
+    </form>
+</div>
+
+<div class="card">
+    <h3>
+        Resultados ({{ robots_and_systems|length }} robô{{ 's' if robots_and_systems|length != 1 else '' }}/sistema{{ 's' if robots_and_systems|length != 1 else '' }})
+        <a href="{{ url_for('export_dashboard_robots_systems', **request.args) }}" class="link-button" style="margin-left: 16px;">
+            📥 Exportar para Excel
+        </a>
+    </h3>
+    
+    {% if robots_and_systems %}
+        <div style="overflow-x: auto;">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Nome do robô/sistema</th>
+                        <th>Tipo</th>
+                        <th>Projeto</th>
+                        <th>Macroetapa</th>
+                        <th>Escopo</th>
+                        <th>Ferramentas</th>
+                        <th>Data de início</th>
+                        <th>Data de fim</th>
+                        <th>Status</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for item in robots_and_systems %}
+                        <tr>
+                            <td>{{ item.stage_name }}</td>
+                            <td>{{ item.stage_type }}</td>
+                            <td>
+                                <a href="{{ url_for('project_detail', project_id=item.project_id) }}">{{ item.project_name }}</a>
+                            </td>
+                            <td>{{ item.macrostage_name }}</td>
+                            <td>{{ item.scope or '—' }}</td>
+                            <td>
+                                {% if item.tools or item.other_tools %}
+                                    {% if item.tools %}{{ item.tools }}{% endif %}
+                                    {% if item.tools and item.other_tools %}, {% endif %}
+                                    {% if item.other_tools %}{{ item.other_tools }}{% endif %}
+                                {% else %}
+                                    —
+                                {% endif %}
+                            </td>
+                            <td>
+                                {% if item.start_date %}
+                                    {{ item.start_date.strftime("%d/%m/%Y") }}
+                                {% else %}
+                                    —
+                                {% endif %}
+                            </td>
+                            <td>
+                                {% if item.end_date %}
+                                    {{ item.end_date.strftime("%d/%m/%Y") }}
+                                {% else %}
+                                    —
+                                {% endif %}
+                            </td>
+                            <td>
+                                {% if item.status == "Concluído" %}
+                                    <span style="color: #4caf50; font-weight: bold;">{{ item.status }}</span>
+                                {% elif item.status == "Em andamento" %}
+                                    <span style="color: #ff9800; font-weight: bold;">{{ item.status }}</span>
+                                {% else %}
+                                    <span style="color: #666; font-weight: bold;">{{ item.status }}</span>
+                                {% endif %}
+                            </td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    {% else %}
+        <p>Nenhum robô ou sistema encontrado com os filtros aplicados.</p>
+    {% endif %}
+</div>
+{% endblock %}
+
