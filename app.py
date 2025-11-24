@@ -999,6 +999,7 @@ def dashboard_timeline():
     (macroetapas, etapas, tarefas) em uma linha do tempo visual.
     """
     # Lê parâmetros de filtro da query string (suporta múltiplos valores)
+    project_name_filters = [p.strip() for p in request.args.getlist("project_name") if p.strip()]
     status_filters = [s.strip() for s in request.args.getlist("status") if s.strip()]
     requesting_agency_filters = [a.strip() for a in request.args.getlist("requesting_agency") if a.strip()]
     coordinator_filters = [c.strip() for c in request.args.getlist("coordinator") if c.strip()]
@@ -1033,6 +1034,14 @@ def dashboard_timeline():
 
     # Aplica filtros diretos em Project (multi-select)
     # Nota: filtro de status será aplicado após calcular status efetivo
+    if project_name_filters:
+        # Converte strings para inteiros (IDs de projeto)
+        try:
+            project_ids = [int(p_id) for p_id in project_name_filters]
+            query = query.filter(Project.id.in_(project_ids))
+        except ValueError:
+            # Se houver erro na conversão, ignora o filtro
+            pass
     if requesting_agency_filters:
         query = query.filter(Project.requesting_agency.in_(requesting_agency_filters))
     if coordinator_filters:
@@ -1079,25 +1088,33 @@ def dashboard_timeline():
             else:
                 query = query.filter(or_(*project_type_conditions))
 
-    # Filtro por período (sobreposição)
+    # Filtro por período
     if date_start or date_end:
         if date_start and date_end:
-            # Projetos que se sobrepõem ao período: start <= date_end AND end >= date_start
+            # Projetos que iniciaram e terminaram dentro do período: start >= date_start AND end <= date_end
             query = query.filter(
                 and_(
-                    or_(Project.start_date.is_(None), Project.start_date <= date_end),
-                    or_(Project.end_date.is_(None), Project.end_date >= date_start)
+                    Project.start_date.isnot(None),
+                    Project.end_date.isnot(None),
+                    Project.start_date >= date_start,
+                    Project.end_date <= date_end
                 )
             )
         elif date_start:
-            # Projetos que começam antes ou durante o período
+            # Projetos que iniciaram a partir da data de início
             query = query.filter(
-                or_(Project.start_date.is_(None), Project.start_date <= date_start)
+                and_(
+                    Project.start_date.isnot(None),
+                    Project.start_date >= date_start
+                )
             )
         elif date_end:
-            # Projetos que terminam depois ou durante o período
+            # Projetos que finalizam até a data de fim
             query = query.filter(
-                or_(Project.end_date.is_(None), Project.end_date >= date_end)
+                and_(
+                    Project.end_date.isnot(None),
+                    Project.end_date <= date_end
+                )
             )
 
     # Ordena por data de início ou nome
@@ -1224,6 +1241,9 @@ def dashboard_timeline():
         calculated_statuses.add(status_info['value'])
     
     filter_options = {
+        "projects": sorted([
+            (p.id, p.name) for p in Project.query.order_by(Project.name).all()
+        ], key=lambda x: x[1]),  # Ordena por nome
         "statuses": sorted(list(calculated_statuses)),
         "requesting_agencies": sorted([
             a[0] for a in Project.query.with_entities(Project.requesting_agency).distinct()
@@ -1237,6 +1257,7 @@ def dashboard_timeline():
 
     # Passa os valores atuais dos filtros para manter selecionados no template
     current_filters = {
+        "project_name": project_name_filters,
         "status": status_filters,
         "requesting_agency": requesting_agency_filters,
         "coordinator": coordinator_filters,
@@ -1260,6 +1281,7 @@ def export_dashboard_timeline():
     Reutiliza toda a lógica de filtros de dashboard_timeline().
     """
     # Lê parâmetros de filtro da query string (suporta múltiplos valores)
+    project_name_filters = [p.strip() for p in request.args.getlist("project_name") if p.strip()]
     status_filters = [s.strip() for s in request.args.getlist("status") if s.strip()]
     requesting_agency_filters = [a.strip() for a in request.args.getlist("requesting_agency") if a.strip()]
     coordinator_filters = [c.strip() for c in request.args.getlist("coordinator") if c.strip()]
@@ -1289,6 +1311,14 @@ def export_dashboard_timeline():
     # Reutiliza lógica de filtros do dashboard_timeline
     query = Project.query
 
+    if project_name_filters:
+        # Converte strings para inteiros (IDs de projeto)
+        try:
+            project_ids = [int(p_id) for p_id in project_name_filters]
+            query = query.filter(Project.id.in_(project_ids))
+        except ValueError:
+            # Se houver erro na conversão, ignora o filtro
+            pass
     if requesting_agency_filters:
         query = query.filter(Project.requesting_agency.in_(requesting_agency_filters))
     if coordinator_filters:
@@ -1351,10 +1381,18 @@ def export_dashboard_timeline():
         # Adiciona projeto
         if project.start_date and project.end_date:
             # Verifica filtro de data
-            if date_start and project.end_date < date_start:
-                continue
-            if date_end and project.start_date > date_end:
-                continue
+            if date_start and date_end:
+                # Projetos que iniciaram e terminaram dentro do período
+                if project.start_date < date_start or project.end_date > date_end:
+                    continue
+            elif date_start:
+                # Projetos que iniciaram a partir da data de início
+                if project.start_date < date_start:
+                    continue
+            elif date_end:
+                # Projetos que finalizam até a data de fim
+                if project.end_date > date_end:
+                    continue
             
             project_item = {
                 "name": project.name,
@@ -1370,10 +1408,18 @@ def export_dashboard_timeline():
                 continue
             
             # Verifica filtro de data
-            if date_start and macro.end_date < date_start:
-                continue
-            if date_end and macro.start_date > date_end:
-                continue
+            if date_start and date_end:
+                # Macroetapas que iniciaram e terminaram dentro do período
+                if macro.start_date < date_start or macro.end_date > date_end:
+                    continue
+            elif date_start:
+                # Macroetapas que iniciaram a partir da data de início
+                if macro.start_date < date_start:
+                    continue
+            elif date_end:
+                # Macroetapas que finalizam até a data de fim
+                if macro.end_date > date_end:
+                    continue
 
             macro_item = {
                 "name": f"  {macro.name}",
@@ -1391,10 +1437,18 @@ def export_dashboard_timeline():
                         continue
                     
                     # Verifica filtro de data
-                    if date_start and stage.end_date < date_start:
-                        continue
-                    if date_end and stage.start_date > date_end:
-                        continue
+                    if date_start and date_end:
+                        # Etapas que iniciaram e terminaram dentro do período
+                        if stage.start_date < date_start or stage.end_date > date_end:
+                            continue
+                    elif date_start:
+                        # Etapas que iniciaram a partir da data de início
+                        if stage.start_date < date_start:
+                            continue
+                    elif date_end:
+                        # Etapas que finalizam até a data de fim
+                        if stage.end_date > date_end:
+                            continue
 
                     stage_item = {
                         "name": f"    {stage.name}",
@@ -1412,10 +1466,18 @@ def export_dashboard_timeline():
                             continue
                         
                         # Verifica filtro de data
-                        if date_start and task.end_date < date_start:
-                            continue
-                        if date_end and task.start_date > date_end:
-                            continue
+                        if date_start and date_end:
+                            # Tarefas que iniciaram e terminaram dentro do período
+                            if task.start_date < date_start or task.end_date > date_end:
+                                continue
+                        elif date_start:
+                            # Tarefas que iniciaram a partir da data de início
+                            if task.start_date < date_start:
+                                continue
+                        elif date_end:
+                            # Tarefas que finalizam até a data de fim
+                            if task.end_date > date_end:
+                                continue
 
                         task_item = {
                             "name": f"      {task.name}",
@@ -1437,10 +1499,18 @@ def export_dashboard_timeline():
                         continue
                     
                     # Verifica filtro de data
-                    if date_start and task.end_date < date_start:
-                        continue
-                    if date_end and task.start_date > date_end:
-                        continue
+                    if date_start and date_end:
+                        # Tarefas que iniciaram e terminaram dentro do período
+                        if task.start_date < date_start or task.end_date > date_end:
+                            continue
+                    elif date_start:
+                        # Tarefas que iniciaram a partir da data de início
+                        if task.start_date < date_start:
+                            continue
+                    elif date_end:
+                        # Tarefas que finalizam até a data de fim
+                        if task.end_date > date_end:
+                            continue
 
                     task_item = {
                         "name": f"    {task.name}",
@@ -1768,6 +1838,243 @@ def export_dashboard_robots_systems():
     return create_excel_response(wb, filename)
 
 
+def create_project_from_template(name: str) -> Project:
+    """
+    Cria um novo projeto a partir do template pré-definido.
+    
+    Args:
+        name: Nome do projeto
+        
+    Returns:
+        Project: Projeto criado com toda a estrutura de macroetapas, etapas e tarefas
+    """
+    # Criar projeto
+    project = Project(name=name)
+    db.session.add(project)
+    db.session.flush()  # Para obter o ID do projeto
+    
+    # Data inicial: hoje
+    current_date = date.today()
+    
+    # Macroetapa 1: "Alinhamentos iniciais com demandante" (sem etapas)
+    macrostage1 = MacroStage(
+        project=project,
+        name="Alinhamentos iniciais com demandante",
+        position=1,
+        structure_type="tasks"
+    )
+    db.session.add(macrostage1)
+    db.session.flush()
+    
+    # Tarefa 1 da Macroetapa 1: 7 dias
+    task1_start = current_date
+    task1_end = task1_start + timedelta(days=6)  # 7 dias incluindo início e fim
+    task1 = Task(
+        name="Reuniões de alinhamentos iniciais com o demandante e definição da Equipe Automatiza que irá atuar no Projeto",
+        macrostage=macrostage1,
+        stage=None,
+        start_date=task1_start,
+        end_date=task1_end,
+        position=1
+    )
+    db.session.add(task1)
+    current_date = task1_end + timedelta(days=1)  # Próxima tarefa começa no dia seguinte
+    
+    # Macroetapa 2: "Imersão para entendimento da demanda" (sem etapas)
+    macrostage2 = MacroStage(
+        project=project,
+        name="Imersão para entendimento da demanda",
+        position=2,
+        structure_type="tasks"
+    )
+    db.session.add(macrostage2)
+    db.session.flush()
+    
+    # Tarefa 1 da Macroetapa 2: 5 dias
+    task2_start = current_date
+    task2_end = task2_start + timedelta(days=4)  # 5 dias
+    task2 = Task(
+        name="Análise dos documentos e informações repassadas pelo demandante",
+        macrostage=macrostage2,
+        stage=None,
+        start_date=task2_start,
+        end_date=task2_end,
+        position=1
+    )
+    db.session.add(task2)
+    current_date = task2_end + timedelta(days=1)
+    
+    # Tarefa 2 da Macroetapa 2: 5 dias
+    task3_start = current_date
+    task3_end = task3_start + timedelta(days=4)  # 5 dias
+    task3 = Task(
+        name="Avaliação de quais ferramentas e tecnologias poderão ser utilizadas para solucionar o desafio",
+        macrostage=macrostage2,
+        stage=None,
+        start_date=task3_start,
+        end_date=task3_end,
+        position=2
+    )
+    db.session.add(task3)
+    current_date = task3_end + timedelta(days=1)
+    
+    # Macroetapa 3: "Desenvolvimento de ferramentas" (com etapas)
+    macrostage3 = MacroStage(
+        project=project,
+        name="Desenvolvimento de ferramentas",
+        position=3,
+        structure_type="stages"
+    )
+    db.session.add(macrostage3)
+    db.session.flush()
+    
+    # Etapa 1: "Desenvolvimento de robô"
+    stage1 = Stage(
+        name="Desenvolvimento de robô",
+        macrostage=macrostage3,
+        position=1,
+        stage_type="robô"
+    )
+    db.session.add(stage1)
+    db.session.flush()
+    
+    # Tarefas da Etapa 1 (robô)
+    # Tarefa 1: 20 dias
+    task4_start = current_date
+    task4_end = task4_start + timedelta(days=19)  # 20 dias
+    task4 = Task(
+        name="Desenvolver e testar solução localmente",
+        macrostage=macrostage3,
+        stage=stage1,
+        start_date=task4_start,
+        end_date=task4_end,
+        position=1
+    )
+    db.session.add(task4)
+    current_date = task4_end + timedelta(days=1)
+    
+    # Tarefa 2: 10 dias
+    task5_start = current_date
+    task5_end = task5_start + timedelta(days=9)  # 10 dias
+    task5 = Task(
+        name="Testar solução com o demandante e realizar alterações necessárias",
+        macrostage=macrostage3,
+        stage=stage1,
+        start_date=task5_start,
+        end_date=task5_end,
+        position=2
+    )
+    db.session.add(task5)
+    current_date = task5_end + timedelta(days=1)
+    
+    # Tarefa 3: 10 dias
+    task6_start = current_date
+    task6_end = task6_start + timedelta(days=9)  # 10 dias
+    task6 = Task(
+        name="Implantar versão final da solução",
+        macrostage=macrostage3,
+        stage=stage1,
+        start_date=task6_start,
+        end_date=task6_end,
+        position=3
+    )
+    db.session.add(task6)
+    # Para a etapa de sistema, vamos começar após o término da etapa de robô
+    system_start_date = task6_end + timedelta(days=1)
+    
+    # Etapa 2: "Desenvolvimento de sistema"
+    stage2 = Stage(
+        name="Desenvolvimento de sistema",
+        macrostage=macrostage3,
+        position=2,
+        stage_type="sistema"
+    )
+    db.session.add(stage2)
+    db.session.flush()
+    
+    # Tarefas da Etapa 2 (sistema) - começam após a última tarefa do robô
+    # Tarefa 1: 20 dias
+    task7_start = system_start_date
+    task7_end = task7_start + timedelta(days=19)  # 20 dias
+    task7 = Task(
+        name="Desenvolver e testar solução localmente",
+        macrostage=macrostage3,
+        stage=stage2,
+        start_date=task7_start,
+        end_date=task7_end,
+        position=1
+    )
+    db.session.add(task7)
+    current_date = task7_end + timedelta(days=1)
+    
+    # Tarefa 2: 10 dias
+    task8_start = current_date
+    task8_end = task8_start + timedelta(days=9)  # 10 dias
+    task8 = Task(
+        name="Testar solução com o demandante e realizar alterações necessárias",
+        macrostage=macrostage3,
+        stage=stage2,
+        start_date=task8_start,
+        end_date=task8_end,
+        position=2
+    )
+    db.session.add(task8)
+    current_date = task8_end + timedelta(days=1)
+    
+    # Tarefa 3: 10 dias
+    task9_start = current_date
+    task9_end = task9_start + timedelta(days=9)  # 10 dias
+    task9 = Task(
+        name="Implantar versão final da solução",
+        macrostage=macrostage3,
+        stage=stage2,
+        start_date=task9_start,
+        end_date=task9_end,
+        position=3
+    )
+    db.session.add(task9)
+    current_date = task9_end + timedelta(days=1)
+    
+    # Macroetapa 4: "Encerramentos com demandante" (sem etapas)
+    macrostage4 = MacroStage(
+        project=project,
+        name="Encerramentos com demandante",
+        position=4,
+        structure_type="tasks"
+    )
+    db.session.add(macrostage4)
+    db.session.flush()
+    
+    # Tarefa da Macroetapa 4: 7 dias
+    task10_start = current_date
+    task10_end = task10_start + timedelta(days=6)  # 7 dias
+    task10 = Task(
+        name="Reuniões de alinhamentos finais com o demandante",
+        macrostage=macrostage4,
+        stage=None,
+        start_date=task10_start,
+        end_date=task10_end,
+        position=1
+    )
+    db.session.add(task10)
+    
+    # Commit todas as alterações
+    db.session.commit()
+    
+    # Recalcular todas as datas em cascata
+    recalculate_stage(stage1)
+    recalculate_stage(stage2)
+    recalculate_macrostage(macrostage1)
+    recalculate_macrostage(macrostage2)
+    recalculate_macrostage(macrostage3)
+    recalculate_macrostage(macrostage4)
+    recalculate_project(project)
+    recalculate_project_status(project)
+    db.session.commit()
+    
+    return project
+
+
 @app.route("/projects/create", methods=["POST"])
 def create_project():
     """
@@ -1778,10 +2085,18 @@ def create_project():
     if not name:
         # Em uma versão mais elaborada, poderíamos exibir mensagem de erro.
         return redirect(url_for("list_projects"))
-
-    project = Project(name=name)
-    db.session.add(project)
-    db.session.commit()
+    
+    project_type = request.form.get("project_type", "blank").strip()
+    
+    if project_type == "template":
+        # Criar projeto a partir do template
+        project = create_project_from_template(name)
+    else:
+        # Criar projeto em branco (comportamento original)
+        project = Project(name=name)
+        db.session.add(project)
+        db.session.commit()
+    
     return redirect(url_for("list_projects"))
 
 

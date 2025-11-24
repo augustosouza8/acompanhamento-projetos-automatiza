@@ -22,6 +22,17 @@
     <form method="GET" action="{{ url_for('dashboard_timeline') }}">
         <div class="project-form-fields">
             <div class="field">
+                <label for="project_name">Nome do projeto</label>
+                <select id="project_name" name="project_name" multiple>
+                    {% for project_id, project_name in filter_options.projects %}
+                        <option value="{{ project_id }}" {% if project_id|string in (current_filters.project_name if current_filters.project_name is iterable and current_filters.project_name is not string else [current_filters.project_name|string] if current_filters.project_name else []) %}selected{% endif %}>
+                            {{ project_name }}
+                        </option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div class="field">
                 <label for="status">Status do projeto</label>
                 <select id="status" name="status" multiple>
                     {% for status in filter_options.statuses %}

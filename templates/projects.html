@@ -54,6 +54,13 @@
         <label for="name">Nome do projeto:</label><br>
         <input type="text" id="name" name="name" required style="min-width: 300px;">
         <br><br>
+        <label>Tipo de projeto:</label><br>
+        <input type="radio" id="project_type_blank" name="project_type" value="blank" checked>
+        <label for="project_type_blank" style="display: inline; margin-left: 5px;">Novo projeto em branco</label>
+        <br>
+        <input type="radio" id="project_type_template" name="project_type" value="template">
+        <label for="project_type_template" style="display: inline; margin-left: 5px;">Novo projeto a partir do modelo</label>
+        <br><br>
         <button type="submit">Criar projeto</button>
     </form>
 </div>
