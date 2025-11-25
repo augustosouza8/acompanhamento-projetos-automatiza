@@ -2,8 +2,16 @@ __pycache__/
 *.pyc
 *.pyo
 *.pyd
+
+# 1. Ignora todos os arquivos .db, exceto o de interesse
 *.db
-instance/
+!instance/schedule.db
+
+# 2. IGNORAR APENAS o conteúdo de "instance", sem ignorar o diretório raiz
+#    Isso permite que a exceção acima funcione.
+instance/*
+!instance/.gitkeep # Opcional: para manter a pasta vazia rastreada
+
 .venv/
 .env
 .DS_Store

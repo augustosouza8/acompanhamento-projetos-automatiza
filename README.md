@@ -63,7 +63,8 @@ acompanhamento-projetos-automatiza/
 ├── migrations/            # Scripts utilitários para bancos já existentes
 ├── templates/             # HTML + CSS + JS simples (base, lista de projetos, tela detalhada)
 ├── pyproject.toml         # Configuração do projeto (usado por uv/pip)
-└── instance/schedule.db   # Banco SQLite criado automaticamente (ignorado pelo Git)
+├── requirements.txt       # Dependências para deploy no Render
+└── instance/schedule.db   # Banco SQLite (versionado no Git para deploy inicial)
 ```
 
 > **Migrations:** arquivos `001`–`007` são idempotentes e servem apenas para atualizar bancos legados. Ambientes novos podem ignorá-los porque `app.py` chama `db.create_all()` na inicialização.
@@ -120,6 +121,75 @@ python app.py
 Servidor disponível em `http://127.0.0.1:5000`.
 
 > **Para bancos existentes:** execute os arquivos `migrations/<NNN>_*.py` na ordem correta (por ex.: `python migrations/005_allow_tasks_without_stage.py`). Para novos ambientes, não é necessário executar migrations manualmente.
+
+---
+
+## 6.1. Deploy no Render (PoC)
+
+Esta seção descreve como fazer o deploy da aplicação no Render usando SQLite para testes/PoC.
+
+### Pré-requisitos
+
+1. **Garantir que o `schedule.db` está no repositório:**
+   - O arquivo `instance/schedule.db` deve estar versionado no Git
+   - Se ainda não estiver, após ajustar o `.gitignore`, execute:
+     ```bash
+     git add -f instance/schedule.db
+     git commit -m "Adiciona schedule.db inicial para deploy"
+     git push
+     ```
+
+### Passos para deploy
+
+1. **Acesse o [Render Dashboard](https://dashboard.render.com/)**
+   - Faça login ou crie uma conta
+
+2. **Crie um novo Web Service:**
+   - Clique em "New +" → "Web Service"
+   - Conecte seu repositório GitHub (autorize o Render se necessário)
+   - Selecione o repositório `acompanhamento-projetos-automatiza`
+
+3. **Configure o serviço:**
+   - **Name:** escolha um nome (ex: `acompanhamento-projetos`)
+   - **Environment:** Python 3
+   - **Build Command:** `pip install -r requirements.txt`
+   - **Start Command:** `python app.py`
+   - **Plan:** Free (suficiente para PoC)
+
+4. **Deploy:**
+   - Clique em "Create Web Service"
+   - O Render iniciará o build automaticamente
+   - Aguarde o deploy completar (pode levar alguns minutos)
+
+5. **Acesse a aplicação:**
+   - Após o deploy, o Render fornecerá uma URL (ex: `https://acompanhamento-projetos.onrender.com`)
+   - Acesse a URL e você será redirecionado para a página de projetos/dashboard
+   - O banco `instance/schedule.db` do repositório será usado como base inicial
+
+### Importante: Sistema de arquivos efêmero
+
+⚠️ **Atenção:** O sistema de arquivos do Render é **efêmero**. Isso significa que:
+
+- Alterações feitas no banco SQLite durante os testes **podem ser perdidas** em novos deploys
+- Cada vez que o serviço reiniciar ou você fizer um novo deploy, o banco volta ao estado do `schedule.db` versionado no Git
+- Isso é **aceitável para esta fase de PoC/testes**, mas para produção você deve considerar migrar para PostgreSQL (disponível no Render)
+
+### Atualizando o banco inicial
+
+Se você quiser atualizar o snapshot do banco que será usado no deploy:
+
+1. Faça as alterações localmente
+2. Copie o arquivo atualizado:
+   ```bash
+   cp instance/schedule.db instance/schedule.db
+   ```
+3. Adicione ao Git e faça commit:
+   ```bash
+   git add -f instance/schedule.db
+   git commit -m "Atualiza snapshot do banco para deploy"
+   git push
+   ```
+4. O Render fará um novo deploy automaticamente (ou você pode acionar manualmente)
 
 ---
 

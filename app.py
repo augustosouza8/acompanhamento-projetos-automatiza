@@ -19,9 +19,13 @@ from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 from io import BytesIO
 import re
+import os
 
 app = Flask(__name__)
-app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///schedule.db"
+# Configuração do banco SQLite usando caminho absoluto baseado no diretório do projeto
+basedir = os.path.abspath(os.path.dirname(__file__))
+db_path = os.path.join(basedir, "instance", "schedule.db")
+app.config["SQLALCHEMY_DATABASE_URI"] = f"sqlite:///{db_path}"
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 app.config["SECRET_KEY"] = "dev-secret-key-change-in-production"  # Necessário para flash messages
 
@@ -3232,5 +3236,6 @@ if __name__ == "__main__":
     with app.app_context():
         db.create_all()
 
-    # Executa o app Flask em modo debug para facilitar testes
-    app.run(debug=True)
+    # Configuração para funcionar tanto localmente quanto no Render
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port, debug=False)
